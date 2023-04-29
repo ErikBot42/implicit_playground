@@ -1,11 +1,14 @@
+use wgpu::util::DeviceExt;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
 
-use std::mem::size_of;
-use wgpu::util::DeviceExt;
+use std::mem::{replace, size_of};
+use std::time::Instant;
+
+use cgmath::prelude::*;
 
 // `~/.cargo/bin/wasm-pack build`
 // # for plain html:
@@ -115,6 +118,16 @@ struct State {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_controller: CameraController,
+
+    last_frame_print: Instant,
+    frames: usize,
+
+    player: PlayerController,
+
+    last_update: Instant,
+
+    active_gamepad: Option<gilrs::GamepadId>,
+    //gilrs_context: 
 }
 
 impl State {
@@ -194,6 +207,9 @@ impl State {
             fovy: 45.0,
             znear: 0.1,
             zfar: 100.0,
+            forward: 0.0,
+            turn: 0.0,
+            last_update: Instant::now(),
         };
         let mut camera_uniform = CameraUniform::new();
         camera_uniform.update_view_proj(&camera);
@@ -288,6 +304,10 @@ impl State {
         let num_vertices = VERTICES.len() as u32;
 
         let camera_controller = CameraController::new(0.2);
+        let last_frame = Instant::now();
+        let player = PlayerController::new();
+
+        let last_update = Instant::now();
         Self {
             window,
             surface,
@@ -303,6 +323,10 @@ impl State {
             camera_buffer,
             camera_bind_group,
             camera_controller,
+            last_frame_print: last_frame,
+            frames: 0,
+            player,
+            last_update,
         }
     }
 
@@ -321,20 +345,37 @@ impl State {
 
     // was an input fully processed?
     fn input(&mut self, event: &WindowEvent) -> bool {
-        self.camera_controller.process_events(event)
+        self.player.process_events(event) && self.camera_controller.process_events(event)
     }
 
     fn update(&mut self) {
+        let dt = replace(&mut self.last_update, Instant::now())
+            .elapsed()
+            .as_secs_f32();
         self.camera_controller.update_camera(&mut self.camera);
         self.camera_uniform.update_view_proj(&self.camera);
+        self.player.update(dt);
+
+        let uniform = self.player.get_uniform();
+
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
-            bytemuck::cast_slice(&[self.camera_uniform]),
+            //bytemuck::cast_slice(&[self.camera_uniform]),
+            bytemuck::cast_slice(&[uniform]),
         );
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        let print_freq: u32 = 120;
+        self.frames = (self.frames + 1) % print_freq as usize;
+        if self.frames == 0 {
+            println!(
+                "{:?}",
+                replace(&mut self.last_frame_print, Instant::now()).elapsed() / print_freq
+            );
+        }
+
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -380,11 +421,11 @@ impl State {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
     position: [f32; 3],
-    color: [f32; 3],
+    //color: [f32; 3],
 }
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+    const ATTRIBS: [wgpu::VertexAttribute; 1] =
+        wgpu::vertex_attr_array![0 => Float32x3/*, 1 => Float32x3*/];
     fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         wgpu::VertexBufferLayout {
             array_stride: size_of::<Self>() as wgpu::BufferAddress,
@@ -400,10 +441,10 @@ impl Vertex {
 #[rustfmt::skip]
 const VERTICES: &[Vertex] = {
     //TODO: remove z coord in input data
-    const A: Vertex = Vertex { position: [ 1.0,  1.0, 0.0], color: [1.0, 0.0, 0.0], };
-    const B: Vertex = Vertex { position: [-1.0, -1.0, 0.0], color: [0.0, 1.0, 0.0], };
-    const C: Vertex = Vertex { position: [ 1.0, -1.0, 0.0], color: [0.0, 0.0, 1.0], };
-    const D: Vertex = Vertex { position: [-1.0,  1.0, 0.0], color: [0.0, 0.0, 0.0], };
+    const A: Vertex = Vertex { position: [ 1.0,  1.0, 0.0]/*, color: [1.0, 0.0, 0.0], */};
+    const B: Vertex = Vertex { position: [-1.0, -1.0, 0.0]/*, color: [0.0, 1.0, 0.0], */};
+    const C: Vertex = Vertex { position: [ 1.0, -1.0, 0.0]/*, color: [0.0, 0.0, 1.0], */};
+    const D: Vertex = Vertex { position: [-1.0,  1.0, 0.0]/*, color: [0.0, 0.0, 0.0], */};
     &[
         A, B, C, 
         A, D, B,
@@ -419,13 +460,25 @@ struct Camera {
     fovy: f32,
     znear: f32,
     zfar: f32,
+    forward: f32,
+    turn: f32,
+    last_update: Instant,
 }
 
 impl Camera {
     fn build_view_projection_matrix(&self) -> cgmath::Matrix4<f32> {
         let view = cgmath::Matrix4::look_at_rh(self.eye, self.target, self.up);
         let proj = cgmath::perspective(cgmath::Deg(self.fovy), self.aspect, self.znear, self.zfar);
-        return OPENGL_TO_WGPU_MATRIX * proj * view;
+
+        cgmath::Matrix4::from_translation(cgmath::Vector3::new(0.0, 0.0, self.forward))
+            * cgmath::Matrix4::from_angle_y(cgmath::Deg(self.turn))
+            * cgmath::Matrix4::from_angle_x(cgmath::Deg(0.0))
+
+        //cgmath::Matrix4::from_translation(cgmath::Vector3::new(0.0, 0.0, 0.3))
+        //    * cgmath::Matrix4::from_angle_y(cgmath::Deg(45.0))
+        //    * cgmath::Matrix4::from_angle_x(cgmath::Deg(45.0))
+
+        //OPENGL_TO_WGPU_MATRIX;// * proj * view;
     }
 }
 #[repr(C)]
@@ -434,6 +487,11 @@ struct CameraUniform {
     view_proj: [[f32; 4]; 4],
 }
 impl CameraUniform {
+    fn from_mat(mat: cgmath::Matrix4<f32>) -> Self {
+        Self {
+            view_proj: mat.into(),
+        }
+    }
     fn new() -> Self {
         use cgmath::SquareMatrix;
         Self {
@@ -452,6 +510,117 @@ pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
     0.0, 0.0, 0.5, 0.0,
     0.0, 0.0, 0.5, 1.0,
 );
+
+struct PlayerController {
+    velocity: f32, // forward speed, also controls rotational speed.
+    key_up: bool,
+    key_down: bool,
+    key_left: bool,
+    key_right: bool,
+    key_forward: bool,
+    key_back: bool,
+
+    state: cgmath::Matrix4<f32>,
+}
+impl PlayerController {
+    fn new() -> Self {
+        use cgmath::SquareMatrix;
+        Self {
+            velocity: 0.0,
+            key_up: false,
+            key_down: false,
+            key_left: false,
+            key_right: false,
+            key_forward: false,
+            key_back: false,
+            state: cgmath::Matrix4::identity(),
+        }
+    }
+    fn process_events(&mut self, event: &WindowEvent) -> bool {
+        match event {
+            WindowEvent::KeyboardInput {
+                input:
+                    KeyboardInput {
+                        state,
+                        virtual_keycode: Some(keycode),
+                        ..
+                    },
+                ..
+            } => {
+                let s = *state == ElementState::Pressed;
+                use VirtualKeyCode::*;
+                match keycode {
+                    Up | W => Some(&mut self.key_forward),
+                    Down | S => Some(&mut self.key_back),
+                    Left | A => Some(&mut self.key_left),
+                    Right | D => Some(&mut self.key_right),
+                    Space => Some(&mut self.key_up),
+                    LControl | LShift => Some(&mut self.key_down),
+                    _ => None,
+                }
+                .map(|k| *k = s)
+                .is_some()
+            }
+            _ => false,
+        }
+    }
+    fn update(&mut self, dt: f32) {
+        let dt = 0.2;
+        let max_acceleration = 0.02; //todo make dynamic based on distance to object/centre
+        let turn_factor = 1.0;
+
+        let p = self.state.w.truncate();
+        let s = sdf::sdf(p);
+
+        let fac = s;
+
+        //let decay = 0.2; (todo) // depend on acceleration?
+
+        let range = |a, b| (a as i32 - b as i32) as f32;
+
+        let mut forward = range(self.key_forward, self.key_back);
+        let mut up = range(self.key_up, self.key_down);
+        let mut right = range(self.key_right, self.key_left);
+
+        {
+            use gilrs::{Button, Event, Gilrs};
+            let mut gilrs = Gilrs::new().unwrap();
+            //while let Some(Event { id, event, time }) = gilrs.next_event() {
+                //println!("{:?} New event from {}: {:?}", time, id, event);
+            //}
+            for (_id, gamepad) in gilrs.gamepads() {
+                //println!("{} is {:?}", gamepad.name(), gamepad.power_info());
+                use gilrs::ev::Axis::*;
+                forward += gamepad.value(RightStickY);
+                up += gamepad.value(LeftStickY);
+                right += gamepad.value(LeftStickX);
+
+            }
+        }
+
+        let da = dt * max_acceleration * forward;
+        self.velocity += da;
+        self.velocity *= 0.99;
+
+        let rotation = cgmath::Matrix4::from_angle_y(cgmath::Rad(-right * dt * 0.1 * turn_factor))
+            * cgmath::Matrix4::from_angle_x(cgmath::Rad(up * dt * 0.1 * turn_factor));
+
+        let translation =
+            cgmath::Matrix4::from_translation((-self.state.z.truncate()) * forward * dt * fac);
+
+        //let total = trans * rot;
+
+        self.state = translation * self.state * rotation;
+        //self.state = total;
+
+        //cgmath::Matrix4::from_translation(cgmath::Vector3::new(0.0, 0.0, self.forward))
+        //    * cgmath::Matrix4::from_angle_y(cgmath::Deg(self.turn))
+        //    * cgmath::Matrix4::from_angle_x(cgmath::Deg(0.0))
+    }
+    fn get_uniform(&self) -> CameraUniform {
+        CameraUniform::from_mat(self.state)
+    }
+}
 
 #[derive(Debug)]
 struct CameraController {
@@ -509,36 +678,50 @@ impl CameraController {
     }
 
     fn update_camera(&self, camera: &mut Camera) {
-        dbg!(&camera);
-        dbg!(&self);
-        use cgmath::InnerSpace;
-        let forward: cgmath::Vector3<f32> = camera.target - camera.eye;
-        let forward_norm: cgmath::Vector3<f32> = forward.normalize();
-        let forward_mag: f32 = forward.magnitude();
+        //use cgmath::InnerSpace;
 
-        // Prevents glitching when camera gets too close to the
-        // center of the scene.
-        if self.forward && forward_mag > self.speed {
-            camera.eye += forward_norm * self.speed;
+        let dt = replace(&mut camera.last_update, Instant::now())
+            .elapsed()
+            .as_secs_f32();
+
+        if self.forward {
+            camera.forward += dt;
         }
         if self.backward {
-            camera.eye -= forward_norm * self.speed;
+            camera.forward -= dt;
         }
-
-        let right = forward_norm.cross(camera.up);
-
-        // Redo radius calc in case the fowrard/backward is pressed.
-        let forward = camera.target - camera.eye;
-        let forward_mag = forward.magnitude();
-
         if self.right {
-            // Rescale the distance between the target and eye so
-            // that it doesn't change. The eye therefore still
-            // lies on the circle made by the target and eye.
-            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
+            camera.turn += 180.0 * dt
         }
         if self.left {
-            camera.eye = camera.target - (forward - right * self.speed).normalize() * forward_mag;
+            camera.turn -= 180.0 * dt
         }
+    }
+}
+
+mod sdf {
+    use cgmath::*;
+    fn sd_sphere(pos: Vector3<f32>, r: f32) -> f32 {
+        return pos.magnitude() - r;
+    }
+
+    fn mod_space(v: f32, r: f32) -> f32 {
+        return (v + r).abs() % (2.0 * r) - r;
+    }
+
+    fn sphere_field(p: Vector3<f32>) -> f32 {
+        let r = 0.5;
+        return sd_sphere(
+            Vector3::new(
+                mod_space(p.x + r, r),
+                mod_space(p.y + r, r),
+                mod_space(p.z + r, r),
+            ),
+            0.7 * r,
+        );
+    }
+
+    pub(crate) fn sdf(p: Vector3<f32>) -> f32 {
+        return sphere_field(p);
     }
 }
