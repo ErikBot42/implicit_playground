@@ -1,11 +1,20 @@
+#cargo-features = ["codegen-backend"]
+
 [package]
 name = "implicit_playground"
 version = "0.1.0"
 edition = "2021"
+#codegen-backend = "cranelift"
 
-[lib]
-crate-type = ["cdylib", "rlib"]
+#[lib]
+#crate-type = ["cdylib", "rlib"]
 
+#[profile.dev]
+#opt-level = 3
+
+#[build]
+#rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+#rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

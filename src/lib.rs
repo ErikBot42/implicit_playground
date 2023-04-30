@@ -127,7 +127,7 @@ struct State {
     last_update: Instant,
 
     active_gamepad: Option<gilrs::GamepadId>,
-    //gilrs_context: 
+    gilrs_context: gilrs::Gilrs,
 }
 
 impl State {
@@ -288,11 +288,11 @@ impl State {
                 // Requires Features::CONSERVATIVE_RASTERIZATION
                 conservative: false,
             },
-            depth_stencil: None, // 1.
+            depth_stencil: None, 
             multisample: wgpu::MultisampleState {
-                count: 1,                         // 2.
-                mask: !0,                         // 3.
-                alpha_to_coverage_enabled: false, // 4.
+                count: 1,                         
+                mask: !0,                         
+                alpha_to_coverage_enabled: false, 
             },
             multiview: None, // 5.
         });
@@ -308,6 +308,9 @@ impl State {
         let player = PlayerController::new();
 
         let last_update = Instant::now();
+
+        let active_gamepad = None;
+        let gilrs_context = gilrs::Gilrs::new().unwrap();
         Self {
             window,
             surface,
@@ -327,6 +330,8 @@ impl State {
             frames: 0,
             player,
             last_update,
+            active_gamepad,
+            gilrs_context,
         }
     }
 
@@ -354,7 +359,8 @@ impl State {
             .as_secs_f32();
         self.camera_controller.update_camera(&mut self.camera);
         self.camera_uniform.update_view_proj(&self.camera);
-        self.player.update(dt);
+        self.player
+            .update(dt, &mut self.active_gamepad, &mut self.gilrs_context);
 
         let uniform = self.player.get_uniform();
 
@@ -533,7 +539,7 @@ impl PlayerController {
             key_right: false,
             key_forward: false,
             key_back: false,
-            state: cgmath::Matrix4::identity(),
+            state: cgmath::Matrix4::from_translation(cgmath::Vector3::new(0.0, 0.0, 0.5)),
         }
     }
     fn process_events(&mut self, event: &WindowEvent) -> bool {
@@ -564,13 +570,18 @@ impl PlayerController {
             _ => false,
         }
     }
-    fn update(&mut self, dt: f32) {
+    fn update(
+        &mut self,
+        dt: f32,
+        active_gamepad: &mut Option<gilrs::GamepadId>,
+        gilrs_context: &mut gilrs::Gilrs,
+    ) {
         let dt = 0.2;
         let max_acceleration = 0.02; //todo make dynamic based on distance to object/centre
         let turn_factor = 1.0;
 
         let p = self.state.w.truncate();
-        let s = sdf::sdf(p);
+        let s = 0.1;//sdf::sdf(p);
 
         let fac = s;
 
@@ -583,18 +594,25 @@ impl PlayerController {
         let mut right = range(self.key_right, self.key_left);
 
         {
-            use gilrs::{Button, Event, Gilrs};
-            let mut gilrs = Gilrs::new().unwrap();
-            //while let Some(Event { id, event, time }) = gilrs.next_event() {
-                //println!("{:?} New event from {}: {:?}", time, id, event);
-            //}
-            for (_id, gamepad) in gilrs.gamepads() {
+            //use gilrs::{Button, Event, Gilrs};
+            //let mut gilrs = Gilrs::new().unwrap();
+            while let Some(gilrs::Event { id, event, time }) = gilrs_context.next_event() {}
+            //println!("{:?} New event from {}: {:?}", time, id, event);
+
+            fn value_with_deadzone(
+                gamepad: gilrs::Gamepad,
+                deadzone: f32,
+                axis: gilrs::ev::Axis,
+            ) -> f32 {
+                gamepad.value(axis)
+            }
+
+            for (_id, gamepad) in gilrs_context.gamepads() {
                 //println!("{} is {:?}", gamepad.name(), gamepad.power_info());
                 use gilrs::ev::Axis::*;
                 forward += gamepad.value(RightStickY);
                 up += gamepad.value(LeftStickY);
                 right += gamepad.value(LeftStickX);
-
             }
         }
 
@@ -605,8 +623,9 @@ impl PlayerController {
         let rotation = cgmath::Matrix4::from_angle_y(cgmath::Rad(-right * dt * 0.1 * turn_factor))
             * cgmath::Matrix4::from_angle_x(cgmath::Rad(up * dt * 0.1 * turn_factor));
 
-        let translation =
-            cgmath::Matrix4::from_translation((-self.state.z.truncate()) * forward * dt * fac);
+        let translation = cgmath::Matrix4::from_translation(
+            (-self.state.z.truncate()) * forward * dt * fac * p.magnitude(),
+        );
 
         //let total = trans * rot;
 
@@ -702,26 +721,66 @@ impl CameraController {
 mod sdf {
     use cgmath::*;
     fn sd_sphere(pos: Vector3<f32>, r: f32) -> f32 {
-        return pos.magnitude() - r;
+        pos.magnitude() - r
     }
 
     fn mod_space(v: f32, r: f32) -> f32 {
-        return (v + r).abs() % (2.0 * r) - r;
+        (v + r).abs() % (2.0 * r) - r
+    }
+
+    fn sd_scale<F: Fn(Vector3<f32>) -> f32>(p: Vector3<f32>, f: F, s: f32) -> f32 {
+        f(p / s) * s
     }
 
     fn sphere_field(p: Vector3<f32>) -> f32 {
         let r = 0.5;
-        return sd_sphere(
+        sd_sphere(
             Vector3::new(
                 mod_space(p.x + r, r),
                 mod_space(p.y + r, r),
                 mod_space(p.z + r, r),
             ),
             0.7 * r,
-        );
+        )
     }
 
     pub(crate) fn sdf(p: Vector3<f32>) -> f32 {
-        return sphere_field(p);
+        //sphere_field(p)
+        //sd_menger(p)
+        sd_menger_recursive(p)
+    }
+
+    fn sd_menger_recursive(p: Vector3<f32>) -> f32 {
+        let s: f32 = 0.25;
+
+        let d: f32 = p.magnitude();
+
+        let x = d.log(s).floor();
+        return sd_menger_single(p / s.powf(x))
+            * s.powf(x)
+                .min(sd_menger_single(p / s.powf(x + 1.0)) * s.powf(x + 1.0));
+    }
+
+    fn sd_cross(p: Vector3<f32>) -> f32 {
+        let r = 1.0;
+        let px = p.x.abs();
+        let py = p.y.abs();
+        let pz = p.z.abs();
+
+        let da = px.max(py);
+        let db = py.max(pz);
+        let dc = pz.max(px);
+        return da.min(db).min(dc) - r;
+    }
+
+    fn sd_menger_single(p: Vector3<f32>) -> f32 {
+        let d = sd_box(p, Vector3::new(1.0, 1.0, 1.0));
+        let c = sd_cross(p * 3.0) / 3.0;
+        d.max(-c)
+    }
+
+    fn sd_box(p: Vector3<f32>, b: Vector3<f32>) -> f32 {
+        let q = p.map(f32::abs) - b;
+        q.map(|a| a.max(0.0)).magnitude() + q.x.max(q.y).max(q.z).min(0.0)
     }
 }
