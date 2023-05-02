@@ -5,8 +5,11 @@ use winit::{
     window::WindowBuilder,
 };
 
-use std::mem::{replace, size_of};
 use std::time::Instant;
+use std::{
+    fs::read_to_string,
+    mem::{replace, size_of},
+};
 
 use cgmath::prelude::*;
 
@@ -117,6 +120,7 @@ struct State {
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    compute_bind_group: wgpu::BindGroup,
     camera_controller: CameraController,
 
     last_frame_print: Instant,
@@ -260,84 +264,78 @@ impl State {
             ..Default::default()
         });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                //wgpu::BindGroupLayoutEntry {
-                //    binding: 1,
-                //    visibility: wgpu::ShaderStages::FRAGMENT, 
-                //    ty: wgpu::BindingType::Texture {
-                //        multisampled: false,
-                //        view_dimension: wgpu::TextureViewDimension::D2,
-                //        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                //    },
-                //    count: None,
-                //},
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::R32Float,//todo!(),
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        //multisampled: false,
-                        //view_dimension: wgpu::TextureViewDimension::D2,
-                        //sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    // This should match the filterable field of the
-                    // corresponding Texture entry above.
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                    count: None,
-                },
-            ],
-            label: Some("camera_bind_group_layout"),
-        });
+        let camera_buffer_binding = camera_buffer.as_entire_binding();
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-                //wgpu::BindGroupEntry {
-                //    binding: 1,
-                //    resource: wgpu::BindingResource::TextureView(&shadow_texture_view),
-                //},
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&shadow_texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&shadow_sampler),
-                },
-            ],
-            label: Some("camera_bind_group"),
-        });
+        let (bind_group, bind_group_layout) = {
+            make_bind_group(
+                &device,
+                [
+                    (
+                        wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        camera_buffer.as_entire_binding(),
+                    ),
+                    (
+                        wgpu::ShaderStages::FRAGMENT,
+                        wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        },
+                        wgpu::BindingResource::TextureView(&shadow_texture_view),
+                    ),
+                    (
+                        wgpu::ShaderStages::FRAGMENT,
+                        wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        wgpu::BindingResource::Sampler(&shadow_sampler),
+                    ),
+                ],
+            )
+        };
+        let (compute_bind_group, _compute_bind_group_layout) = {
+            make_bind_group(
+                &device,
+                [
+                    (
+                        wgpu::ShaderStages::COMPUTE,
+                        wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::R32Float,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        wgpu::BindingResource::TextureView(&shadow_texture_view),
+                    ),
+                    (
+                        wgpu::ShaderStages::COMPUTE,
+                        wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        camera_buffer.as_entire_binding(),
+                    ),
+                ],
+            )
+        };
 
         surface.configure(&device, &config);
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            //source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-            source: wgpu::ShaderSource::Wgsl(
-                std::fs::read_to_string("src/shader.wgsl").unwrap().into(),
-            ),
+        let fragment_vertex_source =
+            read_to_string("src/sdf.wgsl").unwrap() + &read_to_string("src/shader.wgsl").unwrap();
+        let compute_source =
+            read_to_string("src/sdf.wgsl").unwrap() + &read_to_string("src/compute.wgsl").unwrap();
+
+        let fragment_vertex_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Fragment and vertex shader"),
+            source: wgpu::ShaderSource::Wgsl(fragment_vertex_source.into()),
+        });
+        let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Compute shader"),
+            source: wgpu::ShaderSource::Wgsl(compute_source.into()),
         });
 
         let render_pipeline_layout =
@@ -351,12 +349,12 @@ impl State {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &fragment_vertex_shader,
                 entry_point: "vs_main",
                 buffers: &[Vertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &fragment_vertex_shader,
                 entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
@@ -389,7 +387,7 @@ impl State {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("Compute Pipeline"),
                 layout: None,
-                module: &shader,
+                module: &compute_shader,
                 entry_point: "compute_main",
             });
 
@@ -432,24 +430,14 @@ impl State {
             shadow_compute_pipeline,
             shadow_width,
             shadow_height,
+            compute_bind_group,
         };
-        state.init_shadows();
+        //state.init_shadows();
         state
     }
 
-    fn init_shadows(&mut self) {
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            let mut cpass =
-                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
-            cpass.set_pipeline(&self.shadow_compute_pipeline);
-            cpass.set_bind_group(0, &self.bind_group, &[]);
-            cpass.dispatch_workgroups(self.shadow_width, self.shadow_height, 1);
-        }
-        self.queue.submit(std::iter::once(encoder.finish()));
-    }
+    //fn init_shadows(&mut self) {
+    //}
 
     pub fn window(&self) -> &Window {
         &self.window
@@ -502,6 +490,22 @@ impl State {
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+
+
+        let mut compute_encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
+        {
+            let mut cpass =
+                compute_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("Shadow Compute pass")});
+            cpass.set_pipeline(&self.shadow_compute_pipeline);
+            cpass.set_bind_group(0, &self.compute_bind_group, &[]);
+            cpass.dispatch_workgroups(self.shadow_width, self.shadow_height, 1);
+        }
+
+
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -532,11 +536,48 @@ impl State {
         }
 
         // submit will accept anything that implements IntoIter
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.queue.submit([encoder.finish(), compute_encoder.finish()]);
         output.present();
 
         Ok(())
     }
+}
+
+fn make_bind_group<const N: usize>(
+    device: &wgpu::Device,
+    data: [(wgpu::ShaderStages, wgpu::BindingType, wgpu::BindingResource); N],
+) -> (wgpu::BindGroup, wgpu::BindGroupLayout) {
+    let bind_group_layout: wgpu::BindGroupLayout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &data
+                .iter()
+                .enumerate()
+                .map(
+                    |(binding, &(visibility, ty, _))| wgpu::BindGroupLayoutEntry {
+                        binding: binding as u32,
+                        visibility,
+                        ty,
+                        count: None,
+                    },
+                )
+                .collect::<Vec<_>>(),
+            label: Some("bind group layout"),
+        });
+    (
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &bind_group_layout,
+            entries: &data
+                .into_iter()
+                .enumerate()
+                .map(|(binding, (_, _, resource))| wgpu::BindGroupEntry {
+                    binding: binding as u32,
+                    resource,
+                })
+                .collect::<Vec<_>>(),
+            label: Some("bind group"),
+        }),
+        bind_group_layout,
+    )
 }
 
 #[repr(C)]
@@ -784,18 +825,27 @@ impl PlayerController {
             }
         }
 
+        fn deadzone(a: f32) -> f32 {
+            if a.abs() < 0.1 {
+                0.0
+            } else {
+                a
+            }
+        }
+
+        rotation_input = rotation_input.map(deadzone);
+        translation_input = translation_input.map(deadzone);
+
         let da = dt * max_acceleration * forward;
         self.velocity += da;
         self.velocity *= 0.99;
 
-        let rotation = cgmath::Matrix4::from_angle_y(cgmath::Rad(-right * dt  * turn_factor))
+        let rotation = cgmath::Matrix4::from_angle_y(cgmath::Rad(-right * dt * turn_factor))
             * cgmath::Matrix4::from_angle_x(cgmath::Rad(up * dt * turn_factor));
 
         let rotation =
-            cgmath::Matrix4::from_angle_y(cgmath::Rad(-rotation_input.x * dt *  turn_factor))
-                * cgmath::Matrix4::from_angle_x(cgmath::Rad(
-                    rotation_input.y * dt * turn_factor,
-                ));
+            cgmath::Matrix4::from_angle_y(cgmath::Rad(-rotation_input.x * dt * turn_factor))
+                * cgmath::Matrix4::from_angle_x(cgmath::Rad(rotation_input.y * dt * turn_factor));
 
         translation_input.z *= -1.0;
         let translation = cgmath::Matrix4::from_translation(
