@@ -1,9 +1,14 @@
 struct CameraUniform {
     view_proj: mat4x4<f32>,
 };
-@group(0) @binding(0)
+@group(0) @binding(0) 
 var<uniform> camera: CameraUniform;
-
+//@group(0) @binding(1) 
+//var shadow_texture: texture_2d<f32>;
+@group(0) @binding(2) 
+var shadow_texture: texture_storage_2d<r32float, write>;
+@group(0) @binding(2) 
+var shadow_sampler: sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -82,14 +87,166 @@ fn sphere_field(p: vec3<f32>) -> f32 {
 }
 
 fn sdf(p: vec3<f32>) -> f32 {
-    return sd_frame_recursive(p);
+    //return sd_juliabulb(p);
+    //return sd_frame_recursive(p);
+    //return sd_mandelbulb(p + vec3<f32>(0.0, 0.0, 1.0));
     //return sd_box_frame(p, vec3<f32>(1.0), 0.3333);
     //return sd_box_frame(p, vec3<f32>(1.0), 0.1);
     //return sd_menger_recursive(p);
     //return sd_menger(p);
-    //return sd_menger_sponge(p);
+    return sd_menger_sponge(p);
     //return sd_menger_recursive(p);
     //return sphere_field(p);
+}
+
+fn sd_juliabulb(p: vec3<f32>) -> f32 {
+    var p = p;
+    let power = 8.0;
+    let c = vec3<f32>(0.5, 1.0, 0.7);
+    // http://blog.hvidtfeldts.net/index.php/2011/09/distance-estimated-3d-fractals-v-the-mandelbulb-different-de-approximations/
+	//let time = 0.0;//_Time.z*2;
+    //float3 c = float3(sin(time*0.12354), sin(time*0.328432), sin(time*0.234723))*1;
+    //float3 c = float3(sin(time),cos(time),sin(time*0.096234))*(sin(0.254*time)+1);
+    var dr = 1.0;
+    var r: f32;
+
+
+    let iterations = 10;//4
+
+    let maxRThreshold = 2.0;//1.5 //"infinity"
+
+    //float Power = 6;//8; // Z_(n+1) = Z(n)^? + c
+    var i: i32;
+    for (i = 0; i < iterations; i++) {
+        r = length(p);
+        if (r > maxRThreshold) {
+            break;
+        }
+
+		dr = pow(r, power - 1.0) * power * dr;
+		
+		p = pow3D_8(p, r);
+        p += c;
+    }
+    return 0.5 * log(r) * r / dr;
+}
+
+fn pow3D_8(p: vec3<f32>, r: f32) -> vec3<f32> {
+	let power = 8.0;
+	// xyz -> zr,theta,phi
+	var theta = acos( p.z / r );
+	var phi = atan2( p.y, p.x );
+
+	// scale and rotate
+	// this is the generalized operation
+	let zr = pow(r, power);
+	theta = theta * power;
+	phi = phi * power;
+
+	// polar -> xyz
+	//p = zr*float3(sin(theta)*cos(phi), sin(phi)*sin(theta), cos(theta));
+	return zr*vec3<f32>(
+        sin(theta) * cos(phi), 
+        sin(phi) * sin(theta), 
+        cos(theta)
+    );
+
+	//https://www.iquilezles.org/www/articles/mandelbulb/mandelbulb.htm
+
+	//float x = p.x; float x2 = x*x; float x4 = x2*x2;
+    //float y = p.y; float y2 = y*y; float y4 = y2*y2;
+    //float z = p.z; float z2 = z*z; float z4 = z2*z2;
+
+    //float k3 = x2 + z2;
+    //float k2 = rsqrt( k3*k3*k3*k3*k3*k3*k3 );
+    //float k1 = x4 + y4 + z4 - 6.0*y2*z2 - 6.0*x2*y2 + 2.0*z2*x2;
+    //float k4 = x2 - y2 + z2;
+
+    //p.x =  64.0*x*y*z*(x2-z2)*k4*(x4-6.0*x2*z2+z4)*k1*k2;
+    //p.y = -16.0*y2*k3*k4*k4 + k1*k1;
+    //p.z = -8.0*y*k4*(x4*x4 - 28.0*x4*x2*z2 + 70.0*x4*z4 - 28.0*x2*z2*z4 + z4*z4)*k1*k2;
+}
+fn sd_mandelbulb(p: vec3<f32>) -> f32 {
+
+    let iterations = 4;
+    let power = 8.0;
+    let scale = 1.0;
+
+    let half_power = (power - 1.0) * 0.5;
+    let bailout = pow(2.0, power);
+
+    var z = p;
+    var r2 = dot(z,z);
+	var dz = 1.0;
+
+	for(var i: i32 = 0; i < iterations; i++) {
+        
+		dz = power * pow(r2, half_power) * dz + 1.0;
+        let r = length(z);
+        let theta = power * acos(z.z / r);
+        let phi = power * atan2(z.y, z.x);
+        z = p + pow(r, power) * 
+            vec3<f32>(
+                sin(theta) * cos(phi),
+                sin(theta) * sin(phi), 
+                cos(theta) 
+            );
+        
+        r2 = dot(z, z);
+		if (r2 > bailout) {
+            break;
+        }
+    }
+    return 0.25 * log(r2) * sqrt(r2) / dz * scale;
+}
+
+
+fn sd_mandelbulb2(pos: vec3<f32>) -> f32 {
+    let pos = pos + vec3<f32>(0.0, 0.0, 1.0);
+
+    let iterations = 5u;
+    let bailout = 0.1*20.0;
+
+    let power = 4.0;
+
+	var z = pos;
+	var dr = 1.0;
+	var r = 0.0;
+    var i: u32;
+    
+    i = 0u;
+    loop {
+
+		r = length(z);
+		if (i >= iterations || r > bailout) {
+            break;
+        }
+		
+		// convert to polar coordinates
+		var theta = acos(z.z/r);
+		var phi = atan2(z.y,z.x);
+        // r^(pow-1)*pow*dr + 1.0
+		dr = pow(r, power - 1.0) * power * dr + 1.0;
+		
+		// scale and rotate the point
+		let zr = pow(r, power);
+
+		theta = theta * power;
+		phi = phi * power;
+		
+		// convert back to cartesian coordinates
+		z = pos + zr * 
+            vec3<f32>(
+                sin(theta) * cos(phi), 
+                sin(phi) * sin(theta), 
+                cos(theta)
+            );
+
+        continuing {
+            i++;
+        }
+	}
+	return 0.5*log(r)*r/dr;
 }
 
 fn sd_frame_recursive(p: vec3<f32>) -> f32 {
@@ -359,12 +516,21 @@ fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, 
         var sun_light = (0.4 * sun_angle + 0.8 * pow(max(0.0, dot(reflected, sun_dir)), 12.0)) * vec3<f32>(1.0, 0.7, 0.2);
         //if (length(sun_light) > 0.01) {
             sun_light *= shadow(
-                p, 
+                p + last_tol * n, 
                 sun_dir, 
-                last_tol * 10.0, 
-                length(p) - length(ray_origin) * 0.2, 
+                //last_tol * 10.0, 
+                0.0,
+                length(p),// - length(ray_origin) * 0.2, 
                 last_tol
             );
+            //sun_light *= softshadow(
+            //    p + 0.001*n, 
+            //    sun_dir,
+            //    //last_tol * 10.0, 
+            //    0.0,
+            //    length(p) - length(ray_origin),
+            //    32.0
+            //);
         //}
 
         let sky_blue = vec3<f32>(135.0, 206.0, 235.0)/255.0;
@@ -379,6 +545,20 @@ fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, 
         return vec4<f32>(col, 1.0);
     }
 
+}
+
+fn softshadow(ro: vec3<f32>, rd: vec3<f32>, mint: f32, maxt: f32, k: f32) -> f32
+{
+    var res = 1.0;
+    var t = mint;
+    for(var i: i32=0; i<64; i++)
+    {
+        let h = sdf(ro + rd*t);
+        res = min( res, k * h / t );
+        if( res<0.001 || t>maxt ) {break;}
+        t += clamp( h, 0.01, 0.2 );
+    }
+    return clamp( res, 0.0, 1.0 );
 }
 
 fn shadow(ro: vec3<f32>, rd: vec3<f32>, mint: f32, maxt: f32, tol: f32) -> f32 {
@@ -471,11 +651,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let fov = 2.0; 
     let ratio = (in.clip_position.x / in.clip_position.y) / (in.uv.x / (1.0 - in.uv.y));
-    let ray_dir_o = normalize(vec3((in.uv - 0.5) * vec2(ratio, 1.0) * fov, - 1.0));
-    let ray_origin_o = vec3(0.0);
 
-    let ray_dir = (camera.view_proj * vec4(ray_dir_o, 0.0)).xyz;
-    let ray_origin = (camera.view_proj * vec4(ray_origin_o, 1.0)).xyz;
+    let ray_dir = (camera.view_proj * vec4<f32>(normalize(
+            vec3<f32>((in.uv - 0.5) * vec2<f32>(ratio, 1.0) * fov, - 1.0)
+        ), 0.0)).xyz;
+    let ray_origin = (camera.view_proj * vec4<f32>(vec3<f32>(0.0), 1.0)).xyz;
 
 
 
@@ -485,10 +665,34 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     //let t_max = 2.0;
     //let t_min = 0.0;//in.initial_sdf;
-    let t_max = length(ray_origin)*4.0;//in.initial_sdf * 5.0;
+    let t_max = length(ray_origin) * 4.0;//in.initial_sdf * 5.0;
     let t_min = in.initial_sdf;
     return ray_color(ray_origin, ray_dir, t_min, t_max, ray_area);
     //return vec4(vec3(length(ray_area)), 1.0);
     //return vec4<f32>(1.0/aspect_ratio, 1.0, 0.0, 1.0);
     //return vec4<f32>(ray_dir, 1.0);
+}
+
+@compute
+@workgroup_size(1) // does not need to execute in group
+fn compute_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let i: u32 = global_id.x;
+    let j: u32 = global_id.y;
+
+    let u = f32(i)/50.0 - 50.0;
+    let v = f32(i)/50.0 - 50.0;
+
+    let uv = vec2<f32>(u, v);
+    let fov = 1.0;
+
+    let ray_dir = normalize(vec3<f32>((uv - 0.5) * 2.0, - 1.0));
+    let ray_origin = vec3<f32>(0.0, 0.0, 0.0);
+    
+    let to = trace(ray_origin, ray_dir, 0.0, 2.0, 100u, 0.001);
+    let t: f32 = to.t;
+
+    //textureStore(shadow_texture, vec2<u32>(i, j), vec4<f32>(t, 0.0, 0.0, 0.0));
+                
+
+
 }

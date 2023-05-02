@@ -116,7 +116,7 @@ struct State {
     camera: Camera,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
-    camera_bind_group: wgpu::BindGroup,
+    bind_group: wgpu::BindGroup,
     camera_controller: CameraController,
 
     last_frame_print: Instant,
@@ -128,6 +128,10 @@ struct State {
 
     active_gamepad: Option<gilrs::GamepadId>,
     gilrs_context: gilrs::Gilrs,
+
+    shadow_compute_pipeline: wgpu::ComputePipeline,
+    shadow_width: u32,
+    shadow_height: u32,
 }
 
 impl State {
@@ -218,9 +222,47 @@ impl State {
             contents: bytemuck::cast_slice(&[camera_uniform]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let camera_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[wgpu::BindGroupLayoutEntry {
+
+        let shadow_height = 100;
+        let shadow_width = 100;
+        let shadow_elements = shadow_width * shadow_height;
+        let shadow: Vec<f32> = (0..shadow_elements).map(|_| 0_f32).collect();
+        let shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Shadow Texture"),
+            size: wgpu::Extent3d {
+                width: shadow_width,
+                height: shadow_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1, // TODO: consider mip map usage
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Float, //Rgba8UnormSrgb, // Red channel only. 32 bit float per channel. Float in shader.
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+
+        let shadow_texture_view =
+            shadow_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest, //Linear,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            //label: None,
+            //compare: None,
+            //border_color: None,
+            //lod_min_clamp: todo!(),
+            //lod_max_clamp: todo!(),
+            //anisotropy_clamp: todo!(),
+            ..Default::default()
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
@@ -229,16 +271,62 @@ impl State {
                         min_binding_size: None,
                     },
                     count: None,
-                }],
-                label: Some("camera_bind_group_layout"),
-            });
+                },
+                //wgpu::BindGroupLayoutEntry {
+                //    binding: 1,
+                //    visibility: wgpu::ShaderStages::FRAGMENT, 
+                //    ty: wgpu::BindingType::Texture {
+                //        multisampled: false,
+                //        view_dimension: wgpu::TextureViewDimension::D2,
+                //        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                //    },
+                //    count: None,
+                //},
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::R32Float,//todo!(),
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        //multisampled: false,
+                        //view_dimension: wgpu::TextureViewDimension::D2,
+                        //sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    // This should match the filterable field of the
+                    // corresponding Texture entry above.
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+            ],
+            label: Some("camera_bind_group_layout"),
+        });
 
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &camera_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                //wgpu::BindGroupEntry {
+                //    binding: 1,
+                //    resource: wgpu::BindingResource::TextureView(&shadow_texture_view),
+                //},
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&shadow_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&shadow_sampler),
+                },
+            ],
             label: Some("camera_bind_group"),
         });
 
@@ -255,7 +343,7 @@ impl State {
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&camera_bind_group_layout],
+                bind_group_layouts: &[&bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -288,14 +376,23 @@ impl State {
                 // Requires Features::CONSERVATIVE_RASTERIZATION
                 conservative: false,
             },
-            depth_stencil: None, 
+            depth_stencil: None,
             multisample: wgpu::MultisampleState {
-                count: 1,                         
-                mask: !0,                         
-                alpha_to_coverage_enabled: false, 
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
             },
             multiview: None, // 5.
         });
+        //{
+        let shadow_compute_pipeline: wgpu::ComputePipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Compute Pipeline"),
+                layout: None,
+                module: &shader,
+                entry_point: "compute_main",
+            });
+
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(VERTICES),
@@ -311,7 +408,7 @@ impl State {
 
         let active_gamepad = None;
         let gilrs_context = gilrs::Gilrs::new().unwrap();
-        Self {
+        let mut state = Self {
             window,
             surface,
             device,
@@ -324,7 +421,7 @@ impl State {
             camera,
             camera_uniform,
             camera_buffer,
-            camera_bind_group,
+            bind_group,
             camera_controller,
             last_frame_print: last_frame,
             frames: 0,
@@ -332,7 +429,26 @@ impl State {
             last_update,
             active_gamepad,
             gilrs_context,
+            shadow_compute_pipeline,
+            shadow_width,
+            shadow_height,
+        };
+        state.init_shadows();
+        state
+    }
+
+    fn init_shadows(&mut self) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut cpass =
+                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
+            cpass.set_pipeline(&self.shadow_compute_pipeline);
+            cpass.set_bind_group(0, &self.bind_group, &[]);
+            cpass.dispatch_workgroups(self.shadow_width, self.shadow_height, 1);
         }
+        self.queue.submit(std::iter::once(encoder.finish()));
     }
 
     pub fn window(&self) -> &Window {
@@ -410,7 +526,7 @@ impl State {
                 depth_stencil_attachment: None,
             });
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(0, &self.bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.draw(0..self.num_vertices, 0..1);
         }
@@ -499,7 +615,6 @@ impl CameraUniform {
         }
     }
     fn new() -> Self {
-        use cgmath::SquareMatrix;
         Self {
             view_proj: cgmath::Matrix4::identity().into(),
         }
@@ -578,10 +693,10 @@ impl PlayerController {
     ) {
         let dt = 0.2;
         let max_acceleration = 0.02; //todo make dynamic based on distance to object/centre
-        let turn_factor = 1.0;
+        let turn_factor = 0.3;
 
         let p = self.state.w.truncate();
-        let s = 0.1;//sdf::sdf(p);
+        let s = 0.1; //sdf::sdf(p);
 
         let fac = s;
 
@@ -589,15 +704,21 @@ impl PlayerController {
 
         let range = |a, b| (a as i32 - b as i32) as f32;
 
+        let mut translation_input: cgmath::Vector3<f32> = cgmath::Vector3::zero();
+        let mut rotation_input: cgmath::Vector3<f32> = cgmath::Vector3::zero();
+
+        let mut right = range(self.key_right, self.key_left);
         let mut forward = range(self.key_forward, self.key_back);
         let mut up = range(self.key_up, self.key_down);
-        let mut right = range(self.key_right, self.key_left);
+
+        translation_input += cgmath::Vector3::new(right, up, forward);
 
         {
             //use gilrs::{Button, Event, Gilrs};
             //let mut gilrs = Gilrs::new().unwrap();
-            while let Some(gilrs::Event { id, event, time }) = gilrs_context.next_event() {}
-            //println!("{:?} New event from {}: {:?}", time, id, event);
+            while let Some(gilrs::Event { id, event, time }) = gilrs_context.next_event() {
+                //println!("{:?} {}: {:?}", time, id, event);
+            }
 
             fn value_with_deadzone(
                 gamepad: gilrs::Gamepad,
@@ -610,9 +731,56 @@ impl PlayerController {
             for (_id, gamepad) in gilrs_context.gamepads() {
                 //println!("{} is {:?}", gamepad.name(), gamepad.power_info());
                 use gilrs::ev::Axis::*;
-                forward += gamepad.value(RightStickY);
-                up += gamepad.value(LeftStickY);
-                right += gamepad.value(LeftStickX);
+                use gilrs::ev::Button::*;
+                translation_input += cgmath::Vector3::new(
+                    gamepad.value(LeftStickX),
+                    //gamepad.value(RightStickY),
+                    //
+                    (gamepad
+                        .button_data(RightTrigger2)
+                        .map(|b| b.value())
+                        .unwrap_or(0.0)
+                        - gamepad
+                            .button_data(LeftTrigger2)
+                            .map(|b| b.value())
+                            .unwrap_or(0.0))
+                        + (gamepad
+                            .button_data(RightTrigger)
+                            .map(|b| b.value())
+                            .unwrap_or(0.0)
+                            - gamepad
+                                .button_data(LeftTrigger)
+                                .map(|b| b.value())
+                                .unwrap_or(0.0)),
+                    gamepad.value(LeftStickY),
+                    //gamepad.value(RightZ), // - gamepad.value(LeftZ),
+                );
+
+                rotation_input += cgmath::Vector3::new(
+                    gamepad.value(RightStickX),
+                    gamepad.value(RightStickY),
+                    0.0,
+                )
+
+                //println!(
+                //    "{}\n",
+                //    [
+                //        LeftStickX,
+                //        LeftStickY,
+                //        LeftZ,
+                //        RightStickX,
+                //        RightStickY,
+                //        RightZ,
+                //        DPadX,
+                //        DPadY
+                //    ].into_iter()
+                //    .map(|a| format!("{:?} {:?}\n", a, gamepad.value(a)))
+                //    .fold(String::new(), |a, b| a + &b),
+                //);
+
+                //right += gamepad.value(LeftStickX);
+                //forward += gamepad.value(RightStickY);
+                //up += gamepad.value(LeftStickY);
             }
         }
 
@@ -620,11 +788,20 @@ impl PlayerController {
         self.velocity += da;
         self.velocity *= 0.99;
 
-        let rotation = cgmath::Matrix4::from_angle_y(cgmath::Rad(-right * dt * 0.1 * turn_factor))
-            * cgmath::Matrix4::from_angle_x(cgmath::Rad(up * dt * 0.1 * turn_factor));
+        let rotation = cgmath::Matrix4::from_angle_y(cgmath::Rad(-right * dt  * turn_factor))
+            * cgmath::Matrix4::from_angle_x(cgmath::Rad(up * dt * turn_factor));
 
+        let rotation =
+            cgmath::Matrix4::from_angle_y(cgmath::Rad(-rotation_input.x * dt *  turn_factor))
+                * cgmath::Matrix4::from_angle_x(cgmath::Rad(
+                    rotation_input.y * dt * turn_factor,
+                ));
+
+        translation_input.z *= -1.0;
         let translation = cgmath::Matrix4::from_translation(
-            (-self.state.z.truncate()) * forward * dt * fac * p.magnitude(),
+            /*(-self.state.z.truncate()) * */
+            (self.state * translation_input.extend(0.0)).truncate() * dt * fac * p.magnitude(),
+            //(-self.state.z.truncate()) * forward * dt * fac * p.magnitude(),
         );
 
         //let total = trans * rot;
