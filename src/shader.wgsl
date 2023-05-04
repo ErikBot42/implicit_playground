@@ -1,10 +1,4 @@
 
-
-
-
-struct CameraUniform {
-    view_proj: mat4x4<f32>,
-};
 @group(0) @binding(0) 
 var<uniform> camera: CameraUniform;
 
@@ -16,7 +10,7 @@ var shadow_texture: texture_2d<f32>;
 var shadow_sampler: sampler;
 
 struct VertexInput {
-    @location(0) position: vec3<f32>,
+    @location(0) position: vec2<f32>,
     //@location(1) color: vec3<f32>,
 };
 
@@ -24,28 +18,29 @@ struct VertexOutput {
     // invariant = calc pure function of vertex pos 
     @invariant @builtin(position) clip_position: vec4<f32>,
     //@location(0) color: vec3<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) signed_uv: vec2<f32>,
-    @location(3) initial_sdf: f32,
+    @location(0) uv: vec2<f32>,
+    @location(1) signed_uv: vec2<f32>,
+    @location(2) initial_sdf: f32,
 };
 
 @vertex
 fn vs_main(
     model: VertexInput,
 ) -> VertexOutput {
+
     //camera.view_proj;
     var out: VertexOutput;
     //out.color = model.color;
     //out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0);
 
-    let ray_origin = (camera.view_proj * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    let ray_origin = (camera.view_proj * vec4<f32>(0.0, 0.0, 0.0, 1.0)).xyz;
     let initial_sdf = sdf(ray_origin);
     out.initial_sdf = initial_sdf;
 
 
-    out.clip_position = vec4<f32>(model.position, 1.0);
-    out.uv = vec2<f32>(model.position.x, model.position.y) * vec2<f32>(0.5) + vec2<f32>(0.5);
-    out.signed_uv = vec2<f32>(model.position.x, model.position.y);
+    out.clip_position = vec4<f32>(model.position.xy, 0.0, 1.0);
+    out.uv = model.position.xy * vec2<f32>(0.5) + vec2<f32>(0.5);
+    out.signed_uv = model.position.xy;
     return out;
 }
 
@@ -67,6 +62,26 @@ fn vs_main(
 // cx/cy * (v/u) = (width/height) 
 
 
+fn sample_shadow_texture(p: vec3<f32>) -> f32 {
+    var o = normalize(abs(p));
+    if (o.x > o.y && o.x > o.z) {
+        o = o.zyx;
+    }
+    if (o.y > o.x && o.y > o.z) {
+        o = o.xzy;
+    }
+    if (o.z > o.x && o.z > o.y) {
+        o = o.yxz;
+    }
+    o = o/o.z;
+
+    let sample = textureSample(shadow_texture, shadow_sampler, o.xy * 1.0 ).r; 
+
+    return sample;
+}
+fn vec3_to_f32_rand(co: vec3<f32>) -> f32 {
+    return fract(sin(dot(co, vec3<f32>(3.12312, 12.9898, 78.233))) * 43758.5453);
+}
 
 fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, ray_area: f32) -> vec4<f32> {
     let max_dist = t_max;
@@ -84,32 +99,64 @@ fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, 
 
     // try to maximize how much stuff the user sees while still hiding cutoff point
     //let fog = pow(min(t / max_dist, 1.0), 4.0);
-    let fog = pow(smoothstep(0.0, max_dist, t), 10.0);
+    let fog = pow(smoothstep(0.0, max_dist, t), 3.0); //10.0
     let fog_color = vec3<f32>(0.2);
     
     let p = ray_origin + t * ray_dir;
 
-    var o = normalize(abs(p));
-    if (o.x > o.y && o.x > o.z) {
-        o = o.zyx;
-    }
-    if (o.y > o.x && o.y > o.z) {
-        o = o.xzy;
-    }
-    if (o.z > o.x && o.z > o.y) {
-        o = o.yxz;
-    }
-    o = o/o.z;
+    //var o = normalize(abs(p));
+    //if (o.x > o.y && o.x > o.z) {
+    //    o = o.zyx;
+    //}
+    //if (o.y > o.x && o.y > o.z) {
+    //    o = o.xzy;
+    //}
+    //if (o.z > o.x && o.z > o.y) {
+    //    o = o.yxz;
+    //}
+    //o = o/o.z;
 
-    let sample = textureSample(shadow_texture, shadow_sampler, o.xy * 1.0 ).r; 
+    //let sample = textureSample(shadow_texture, shadow_sampler, o.xy * 1.0 ).r; 
     //return vec4<f32>(sample/20.0, 0.0, 0.0, 1.0);
     //return vec4<f32>(sample/20.0, 0.0, 0.0, 1.0);
     //return vec4<f32>(0.0*length(p)/5.0, sample - length(p), length(p) - sample, 1.0);
     //return vec4<f32>(sample/5.0 - 0.5, sample / 5.0, 0.0, 1.0);
     //return vec4<f32>(abs(length(p)-sample), 0.0, 0.0, 1.0);
+
+
+
+    let t0 = ray_origin;
+    let t1 = p;
+    var volumetric_light = 0.0;
+    let samples = 25;
+    {
+        var p = p;
+        for (var i: i32 = 0; i<samples; i++) {
+            let v = vec3_to_f32_rand(p);//(f32(i)+0.5)/f32(samples);
+            p = mix(t0, t1, v);
+            let r = length(p)/length(ray_origin);
+            let sample = sample_shadow_texture(p);
+            var sun_fac = 1.0/(r*r);
+            if (sample < r * 0.99) { 
+                sun_fac = 0.0;
+            }
+            volumetric_light += sun_fac/f32(samples);
+        }
+    }
+
+    let sample = sample_shadow_texture(p);
+
+    var sun_fac = 1.0; 
+    if (sample < length(p) * 0.99) { 
+        sun_fac = 0.0;
+    }
     
+    let sun_col = vec3<f32>(1.0, 0.7, 0.2);
+    
+    let fog_res_color = fog_color + sun_col*volumetric_light * 0.5;
+
     if (fog > 0.99) {
-        return vec4<f32>(fog_color, 1.0); 
+        return vec4<f32>(fog_res_color, 1.0); 
     } else {
 
 
@@ -129,7 +176,8 @@ fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, 
         //let dx = dpdx(t);
 
 
-        let n = sdf_normal(p);
+        //let n = sdf_normal(p);
+        let n = sdf_normal_e(p, last_tol * 1.0);
 
         let ao = 1.0 / smooth_i;
 
@@ -140,11 +188,13 @@ fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, 
 
         let sun_angle = max(0.0, dot(n, sun_dir));
 
-        var sun_light = (0.4 * sun_angle + 0.8 * pow(max(0.0, dot(reflected, sun_dir)), 12.0)) * vec3<f32>(1.0, 0.7, 0.2);
 
-        if (sample < length(p) * 0.99) {
-            sun_light *= 0.0;
-        }
+        var sun_light = (0.4 * sun_angle + 0.8 * pow(max(0.0, dot(reflected, sun_dir)), 12.0)) * sun_col;
+        sun_light *= sun_fac;
+        sun_light += sun_col * volumetric_light;
+       // if (sample < length(p) * 0.99) {
+         //   sun_light *= 0.0;
+        //}
         //if (length(sun_light) > 0.01) {
             //sun_light *= shadow(
             //    p + last_tol * n, 
@@ -172,7 +222,7 @@ fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, 
 
         //return vec4<f32>(ao, 0.0, 0.0, 1.0);
 
-        let col = mix(light, fog_color, fog);
+        let col = mix(light, fog_res_color, fog);
         return vec4<f32>(col, 1.0);
     }
 
@@ -284,10 +334,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     //let t = textureSample(shadow_texture, shadow_sampler, in.uv).r; 
     //return vec4<f32>(t/20.0, 0.0, 0.0, 0.0);
     
-   
+    
+    // uv: [0..1] in xy directions
 
     let fov = 2.0; 
     let ratio = (in.clip_position.x / in.clip_position.y) / (in.uv.x / (1.0 - in.uv.y));
+    
 
     let ray_dir = (camera.view_proj * vec4<f32>(normalize(
             vec3<f32>((in.uv - 0.5) * vec2<f32>(ratio, 1.0) * fov, - 1.0)

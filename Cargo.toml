@@ -1,5 +1,8 @@
 #cargo-features = ["codegen-backend"]
 
+
+#[target.x86_64-unknown-linux-gnu] 
+
 [package]
 name = "implicit_playground"
 version = "0.1.0"
@@ -12,7 +15,9 @@ edition = "2021"
 #[profile.dev]
 #opt-level = 3
 
-#[build]
+[build]
+rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/mold"]
+linker = "clang" 
 #rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 #rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 

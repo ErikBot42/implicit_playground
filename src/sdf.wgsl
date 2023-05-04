@@ -1,7 +1,10 @@
 // Sdf functions and things that purely depend on sdf
 
+struct CameraUniform {
+    view_proj: mat4x4<f32>,
+};
 
-// BEGIN SDF PART
+
 fn sd_sphere(pos: vec3<f32>, r: f32) -> f32 {
     return length(pos) - r;
 }
@@ -26,15 +29,15 @@ fn sphere_field(p: vec3<f32>) -> f32 {
 }
 
 fn sdf(p: vec3<f32>) -> f32 {
+    //return sd_frame_recursive(p);
+    return sd_menger_sponge(p);
+
     //return sd_juliabulb(p);
-    return sd_frame_recursive(p);
     //return sd_mandelbulb(p + vec3<f32>(0.0, 0.0, 1.0));
     //return sd_box_frame(p, vec3<f32>(1.0), 0.3333);
     //return sd_box_frame(p, vec3<f32>(1.0), 0.1);
     //return sd_menger_recursive(p);
     //return sd_menger(p);
-    //return sd_menger_sponge(p);
-    //return sd_menger_recursive(p);
     //return sphere_field(p);
 }
 
@@ -241,8 +244,7 @@ fn sd_menger_recursive(p: vec3<f32>) -> f32 {
     //    )
     //);
 
-fn sdf_normal(p: vec3<f32>) -> vec3<f32> {
-    let h = 0.001;
+fn sdf_normal_e(p: vec3<f32>, h: f32) -> vec3<f32> {
     let k = vec2<f32>(1.0, -1.0);
     return normalize( 
         k.xyy * sdf(p + k.xyy * h) + 
@@ -250,7 +252,10 @@ fn sdf_normal(p: vec3<f32>) -> vec3<f32> {
         k.yxy * sdf(p + k.yxy * h) + 
         k.xxx * sdf(p + k.xxx * h) 
     );
+}
 
+fn sdf_normal(p: vec3<f32>) -> vec3<f32> {
+    return sdf_normal_e(p, 0.001);
 }
 
 fn sd_cross(p: vec3<f32>) -> f32 {

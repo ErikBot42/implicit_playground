@@ -141,6 +141,8 @@ struct State {
 impl State {
     // Creating some of the wgpu types requires async code
     async fn new(window: Window) -> Self {
+        let gpu_get_device_timer_start = Instant::now();
+
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
@@ -164,7 +166,7 @@ impl State {
             })
             .next()
             .unwrap();
-
+      
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
@@ -182,6 +184,9 @@ impl State {
             )
             .await
             .unwrap();
+        let gpu_get_device_timer_elapsed = gpu_get_device_timer_start.elapsed();
+
+        let gpu_pipeline_setup_timer_start = Instant::now();
 
         let surface_caps = surface.get_capabilities(&adapter);
 
@@ -229,8 +234,8 @@ impl State {
 
         let shadow_height = 100;
         let shadow_width = 100;
-        let shadow_elements = shadow_width * shadow_height;
-        let shadow: Vec<f32> = (0..shadow_elements).map(|_| 0_f32).collect();
+        //let shadow_elements = shadow_width * shadow_height;
+        //let shadow: Vec<f32> = (0..shadow_elements).map(|_| 0_f32).collect();
         let shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Shadow Texture"),
             size: wgpu::Extent3d {
@@ -238,40 +243,63 @@ impl State {
                 height: shadow_height,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1, // TODO: consider mip map usage
+            mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float, //Rgba8UnormSrgb, // Red channel only. 32 bit float per channel. Float in shader.
+            format: wgpu::TextureFormat::R32Float, // Red channel only. 32 bit float per channel. Float in shader.
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
-
         let shadow_texture_view =
             shadow_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest, //Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::FilterMode::Nearest,
-            //label: None,
-            //compare: None,
-            //border_color: None,
-            //lod_min_clamp: todo!(),
-            //lod_max_clamp: todo!(),
-            //anisotropy_clamp: todo!(),
             ..Default::default()
         });
 
-        let camera_buffer_binding = camera_buffer.as_entire_binding();
+        let pre_march_height = 72; //  9 * 8
+        let pre_march_width = 128; // 16 * 8
+
+        let pre_march_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("pre march texture"),
+            size: wgpu::Extent3d {
+                width: pre_march_width,
+                height: pre_march_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let pre_march_texture_view =
+            pre_march_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let pre_march_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        //let camera_buffer_binding = camera_buffer.as_entire_binding();
 
         let (bind_group, bind_group_layout) = {
             make_bind_group(
+                "Render",
                 &device,
                 [
                     (
-                        wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
                         wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -296,8 +324,9 @@ impl State {
                 ],
             )
         };
-        let (compute_bind_group, _compute_bind_group_layout) = {
+        let (compute_bind_group, compute_bind_group_layout) = {
             make_bind_group(
+                "Shadow",
                 &device,
                 [
                     (
@@ -321,6 +350,30 @@ impl State {
                 ],
             )
         };
+        let (pre_march_bind_group, pre_march_bind_group_layout) = make_bind_group(
+            "Shadow",
+            &device,
+            [
+                (
+                    wgpu::ShaderStages::COMPUTE,
+                    wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rg32Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    wgpu::BindingResource::TextureView(&pre_march_texture_view),
+                ),
+                (
+                    wgpu::ShaderStages::COMPUTE,
+                    wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    camera_buffer.as_entire_binding(),
+                ),
+            ],
+        );
 
         surface.configure(&device, &config);
 
@@ -328,6 +381,10 @@ impl State {
             read_to_string("src/sdf.wgsl").unwrap() + &read_to_string("src/shader.wgsl").unwrap();
         let compute_source =
             read_to_string("src/sdf.wgsl").unwrap() + &read_to_string("src/compute.wgsl").unwrap();
+        let pre_march_source = read_to_string("src/sdf.wgsl").unwrap()
+            + &read_to_string("src/pre_march.wgsl").unwrap();
+
+        println!("{compute_source}");
 
         let fragment_vertex_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Fragment and vertex shader"),
@@ -336,6 +393,10 @@ impl State {
         let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Compute shader"),
             source: wgpu::ShaderSource::Wgsl(compute_source.into()),
+        });
+        let pre_march_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Pre march shader"),
+            source: wgpu::ShaderSource::Wgsl(pre_march_source.into()),
         });
 
         let render_pipeline_layout =
@@ -382,12 +443,30 @@ impl State {
             },
             multiview: None, // 5.
         });
-        //{
+        let shadow_compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Shadow compute pipeline layout"),
+                bind_group_layouts: &[&compute_bind_group_layout],
+                push_constant_ranges: &[],
+            });
         let shadow_compute_pipeline: wgpu::ComputePipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("Compute Pipeline"),
-                layout: None,
+                label: Some("Shadow compute Pipeline"),
+                layout: Some(&shadow_compute_pipeline_layout),
                 module: &compute_shader,
+                entry_point: "compute_main",
+            });
+        let pre_march_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Pre march pipeline layout"),
+                bind_group_layouts: &[&pre_march_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+        let pre_march_pipeline: wgpu::ComputePipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Pre march pipeline"),
+                layout: Some(&pre_march_pipeline_layout),
+                module: &pre_march_shader,
                 entry_point: "compute_main",
             });
 
@@ -406,7 +485,13 @@ impl State {
 
         let active_gamepad = None;
         let gilrs_context = gilrs::Gilrs::new().unwrap();
-        let mut state = Self {
+
+        println!(
+            "Getting device took {:?}\nOther setup took {:?}",
+            gpu_get_device_timer_elapsed,
+            gpu_pipeline_setup_timer_start.elapsed()
+        );
+        Self {
             window,
             surface,
             device,
@@ -431,9 +516,7 @@ impl State {
             shadow_width,
             shadow_height,
             compute_bind_group,
-        };
-        //state.init_shadows();
-        state
+        }
     }
 
     //fn init_shadows(&mut self) {
@@ -485,32 +568,68 @@ impl State {
                 replace(&mut self.last_frame_print, Instant::now()).elapsed() / print_freq
             );
         }
+        /*
+            [src/lib.rs:544] self.surface.get_current_texture() = Ok(
+            SurfaceTexture {
+                texture: Texture {
+                    context: Context {
+                        type: "Native",
+                    },
+                    id: ObjectId {
+                        id: Some(
+                            2305844009941073922,
+                        ),
+                    },
+                    data: Any { .. },
+                    owned: false,
+                    descriptor: TextureDescriptor {
+                        label: None,
+                        size: Extent3d {
+                            width: 958,
+                            height: 1030,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: D2,
+                        format: Bgra8UnormSrgb,
+                        usage: TextureUsages(
+                            RENDER_ATTACHMENT,
+                        ),
+                        view_formats: [],
+                    },
+                },
+                suboptimal: false,
+                presented: false,
+                detail: Any { .. },
+            },
+        )
+        */
 
-        let output = self.surface.get_current_texture()?;
+        let output: wgpu::SurfaceTexture = self.surface.get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-
-        let mut compute_encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
+        let mut encoder: wgpu::CommandEncoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Compute Encoder"),
+                });
         {
-            let mut cpass =
-                compute_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("Shadow Compute pass")});
-            cpass.set_pipeline(&self.shadow_compute_pipeline);
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Shadow Compute pass"),
+            });
             cpass.set_bind_group(0, &self.compute_bind_group, &[]);
+            cpass.set_pipeline(&self.shadow_compute_pipeline);
             cpass.dispatch_workgroups(self.shadow_width, self.shadow_height, 1);
         }
 
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
+        //let mut encoder: wgpu::CommandEncoder =
+        //    self.device
+        //        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        //            label: Some("Render Encoder"),
+        //        });
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -518,12 +637,14 @@ impl State {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0,
-                        }),
+                        // skip clearing buffer
+                        load: wgpu::LoadOp::Load,
+                        //load: wgpu::LoadOp::Clear(wgpu::Color {
+                        //    r: 0.1,
+                        //    g: 0.2,
+                        //    b: 0.3,
+                        //    a: 1.0,
+                        //}),
                         store: true,
                     },
                 })],
@@ -536,7 +657,9 @@ impl State {
         }
 
         // submit will accept anything that implements IntoIter
-        self.queue.submit([encoder.finish(), compute_encoder.finish()]);
+        self.queue
+            //.submit([compute_encoder.finish(), encoder.finish()]);
+            .submit(Some(encoder.finish()));
         output.present();
 
         Ok(())
@@ -544,6 +667,7 @@ impl State {
 }
 
 fn make_bind_group<const N: usize>(
+    name: &str,
     device: &wgpu::Device,
     data: [(wgpu::ShaderStages, wgpu::BindingType, wgpu::BindingResource); N],
 ) -> (wgpu::BindGroup, wgpu::BindGroupLayout) {
@@ -561,7 +685,7 @@ fn make_bind_group<const N: usize>(
                     },
                 )
                 .collect::<Vec<_>>(),
-            label: Some("bind group layout"),
+            label: Some(&format!("{name}: bind_group_layout")),
         });
     (
         device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -574,7 +698,7 @@ fn make_bind_group<const N: usize>(
                     resource,
                 })
                 .collect::<Vec<_>>(),
-            label: Some("bind group"),
+            label: Some(&format!("{name}: bind_group")),
         }),
         bind_group_layout,
     )
@@ -583,12 +707,10 @@ fn make_bind_group<const N: usize>(
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
-    position: [f32; 3],
-    //color: [f32; 3],
+    position: [f32; 2],
 }
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 1] =
-        wgpu::vertex_attr_array![0 => Float32x3/*, 1 => Float32x3*/];
+    const ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x2];
     fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         wgpu::VertexBufferLayout {
             array_stride: size_of::<Self>() as wgpu::BufferAddress,
@@ -604,10 +726,10 @@ impl Vertex {
 #[rustfmt::skip]
 const VERTICES: &[Vertex] = {
     //TODO: remove z coord in input data
-    const A: Vertex = Vertex { position: [ 1.0,  1.0, 0.0]/*, color: [1.0, 0.0, 0.0], */};
-    const B: Vertex = Vertex { position: [-1.0, -1.0, 0.0]/*, color: [0.0, 1.0, 0.0], */};
-    const C: Vertex = Vertex { position: [ 1.0, -1.0, 0.0]/*, color: [0.0, 0.0, 1.0], */};
-    const D: Vertex = Vertex { position: [-1.0,  1.0, 0.0]/*, color: [0.0, 0.0, 0.0], */};
+    const A: Vertex = Vertex { position: [ 1.0,  1.0]};
+    const B: Vertex = Vertex { position: [-1.0, -1.0]};
+    const C: Vertex = Vertex { position: [ 1.0, -1.0]};
+    const D: Vertex = Vertex { position: [-1.0,  1.0]};
     &[
         A, B, C, 
         A, D, B,
