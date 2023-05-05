@@ -15,13 +15,25 @@ edition = "2021"
 #[profile.dev]
 #opt-level = 3
 
-[build]
-rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/mold"]
-linker = "clang" 
+#rustflags = ["-C", "linker=clang", "-C", "link-arg=-fuse-ld=/usr/bin/mold"]
+#rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/mold"]
+#linker = "clang" 
+
+#[build]
+#rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/mold"]
+#linker = "clang" 
+#incremental = true
 #rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 #rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+#[profile]
+#[target.x86_64-unknown-linux-gnu] 
+#rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/mold"]
+#linker = "clang" 
+#incremental = true
+
 
 [dependencies]
 cfg-if = "1.0.0" # conditional compilation

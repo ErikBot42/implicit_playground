@@ -5,13 +5,15 @@ use winit::{
     window::WindowBuilder,
 };
 
-use std::time::Instant;
+use std::{borrow::Cow, time::Instant};
 use std::{
     fs::read_to_string,
     mem::{replace, size_of},
 };
 
 use cgmath::prelude::*;
+
+const NUM_SDF: usize = 4;
 
 // `~/.cargo/bin/wasm-pack build`
 // # for plain html:
@@ -112,7 +114,7 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
     window: Window,
 
-    render_pipeline: wgpu::RenderPipeline,
+    render_pipelines: Vec<wgpu::RenderPipeline>,
     vertex_buffer: wgpu::Buffer,
     num_vertices: u32,
 
@@ -133,9 +135,14 @@ struct State {
     active_gamepad: Option<gilrs::GamepadId>,
     gilrs_context: gilrs::Gilrs,
 
-    shadow_compute_pipeline: wgpu::ComputePipeline,
+    shadow_compute_pipelines: Vec<wgpu::ComputePipeline>,
     shadow_width: u32,
     shadow_height: u32,
+
+    pipeline_index: usize, //pre_march_pipeline: wgpu::ComputePipeline,
+                           //pre_march_bind_group: wgpu::BindGroup,
+                           //pre_march_width: u32,
+                           //pre_march_height: u32,
 }
 
 impl State {
@@ -143,11 +150,11 @@ impl State {
     async fn new(window: Window) -> Self {
         let gpu_get_device_timer_start = Instant::now();
 
-        let size = window.inner_size();
+        let size: winit::dpi::PhysicalSize<u32> = window.inner_size();
 
         // The instance is a handle to our GPU
         // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance: wgpu::Instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             dx12_shader_compiler: Default::default(),
         });
@@ -156,9 +163,9 @@ impl State {
         //
         // The surface needs to live as long as the window that created it.
         // State owns the window so this should be safe.
-        let surface = unsafe { instance.create_surface(&window) }.unwrap();
+        let surface: wgpu::Surface = unsafe { instance.create_surface(&window) }.unwrap();
 
-        let adapter = instance
+        let adapter: wgpu::Adapter = instance
             .enumerate_adapters(wgpu::Backends::all())
             .filter(|adapter| {
                 // Check if this adapter supports our surface
@@ -166,7 +173,7 @@ impl State {
             })
             .next()
             .unwrap();
-      
+
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
@@ -191,7 +198,7 @@ impl State {
         let surface_caps = surface.get_capabilities(&adapter);
 
         // shader assumes srgb
-        let surface_format = surface_caps
+        let surface_format: wgpu::TextureFormat = surface_caps
             .formats
             .iter()
             .copied()
@@ -203,7 +210,7 @@ impl State {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: surface_caps.present_modes[0], // for example vsync/not vsync
+            present_mode: wgpu::PresentMode::Immediate,//surface_caps.present_modes[0], // for example vsync/not vsync
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
         };
@@ -236,7 +243,7 @@ impl State {
         let shadow_width = 100;
         //let shadow_elements = shadow_width * shadow_height;
         //let shadow: Vec<f32> = (0..shadow_elements).map(|_| 0_f32).collect();
-        let shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
+        let shadow_texture: wgpu::Texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Shadow Texture"),
             size: wgpu::Extent3d {
                 width: shadow_width,
@@ -250,9 +257,9 @@ impl State {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
-        let shadow_texture_view =
+        let shadow_texture_view: wgpu::TextureView =
             shadow_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        let shadow_sampler: wgpu::Sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
@@ -262,7 +269,7 @@ impl State {
             ..Default::default()
         });
 
-        let pre_march_height = 72; //  9 * 8
+        /*let pre_march_height = 72; //  9 * 8
         let pre_march_width = 128; // 16 * 8
 
         let pre_march_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -289,11 +296,11 @@ impl State {
             min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
-        });
+        });*/
 
         //let camera_buffer_binding = camera_buffer.as_entire_binding();
 
-        let (bind_group, bind_group_layout) = {
+        let (bind_group, bind_group_layout): (wgpu::BindGroup, wgpu::BindGroupLayout) = {
             make_bind_group(
                 "Render",
                 &device,
@@ -324,7 +331,10 @@ impl State {
                 ],
             )
         };
-        let (compute_bind_group, compute_bind_group_layout) = {
+        let (compute_bind_group, compute_bind_group_layout): (
+            wgpu::BindGroup,
+            wgpu::BindGroupLayout,
+        ) = {
             make_bind_group(
                 "Shadow",
                 &device,
@@ -350,7 +360,7 @@ impl State {
                 ],
             )
         };
-        let (pre_march_bind_group, pre_march_bind_group_layout) = make_bind_group(
+        /*let (pre_march_bind_group, pre_march_bind_group_layout) = make_bind_group(
             "Shadow",
             &device,
             [
@@ -373,90 +383,19 @@ impl State {
                     camera_buffer.as_entire_binding(),
                 ),
             ],
-        );
+        );*/
 
         surface.configure(&device, &config);
 
-        let fragment_vertex_source =
-            read_to_string("src/sdf.wgsl").unwrap() + &read_to_string("src/shader.wgsl").unwrap();
-        let compute_source =
-            read_to_string("src/sdf.wgsl").unwrap() + &read_to_string("src/compute.wgsl").unwrap();
-        let pre_march_source = read_to_string("src/sdf.wgsl").unwrap()
-            + &read_to_string("src/pre_march.wgsl").unwrap();
+        //let pre_march_source = read_to_string("src/sdf.wgsl").unwrap()
+        //    + &read_to_string("src/pre_march.wgsl").unwrap();
 
-        println!("{compute_source}");
-
-        let fragment_vertex_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Fragment and vertex shader"),
-            source: wgpu::ShaderSource::Wgsl(fragment_vertex_source.into()),
-        });
-        let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Compute shader"),
-            source: wgpu::ShaderSource::Wgsl(compute_source.into()),
-        });
-        let pre_march_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        /*let pre_march_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Pre march shader"),
             source: wgpu::ShaderSource::Wgsl(pre_march_source.into()),
-        });
+        });*/
 
-        let render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
-            });
-
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &fragment_vertex_shader,
-                entry_point: "vs_main",
-                buffers: &[Vertex::desc()],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &fragment_vertex_shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw, // 2.
-                cull_mode: Some(wgpu::Face::Back),
-                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-                polygon_mode: wgpu::PolygonMode::Fill,
-                // Requires Features::DEPTH_CLIP_CONTROL
-                unclipped_depth: false,
-                // Requires Features::CONSERVATIVE_RASTERIZATION
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None, // 5.
-        });
-        let shadow_compute_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Shadow compute pipeline layout"),
-                bind_group_layouts: &[&compute_bind_group_layout],
-                push_constant_ranges: &[],
-            });
-        let shadow_compute_pipeline: wgpu::ComputePipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("Shadow compute Pipeline"),
-                layout: Some(&shadow_compute_pipeline_layout),
-                module: &compute_shader,
-                entry_point: "compute_main",
-            });
-        let pre_march_pipeline_layout =
+        /*let pre_march_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Pre march pipeline layout"),
                 bind_group_layouts: &[&pre_march_bind_group_layout],
@@ -468,8 +407,52 @@ impl State {
                 layout: Some(&pre_march_pipeline_layout),
                 module: &pre_march_shader,
                 entry_point: "compute_main",
+            });*/
+
+        let render_pipeline_layout: wgpu::PipelineLayout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[&bind_group_layout],
+                push_constant_ranges: &[],
             });
 
+        let shadow_compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Shadow compute pipeline layout"),
+                bind_group_layouts: &[&compute_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let (render_pipelines, shadow_compute_pipelines): (Vec<_>, Vec<_>) = {
+            let sdf_lib_source = read_to_string("src/sdf.wgsl").unwrap();
+            let fragment_vertex_source = read_to_string("src/shader.wgsl").unwrap();
+            let compute_source = read_to_string("src/compute.wgsl").unwrap();
+
+            sdf_wgsl_gen(NUM_SDF)
+                .iter()
+                .map(|sdf_prefix| {
+                    let fragment_vertex_source: String =
+                        sdf_prefix.clone() + &sdf_lib_source + &fragment_vertex_source;
+                    let compute_source: String =
+                        sdf_prefix.clone() + &sdf_lib_source + &compute_source;
+
+                    let render_pipeline = make_render_pipeline(
+                        &device,
+                        fragment_vertex_source,
+                        &render_pipeline_layout,
+                        &config,
+                    );
+                    //println!("{compute_source}");
+                    let shadow_compute_pipeline = make_compute_pipeline(
+                        &device,
+                        compute_source,
+                        &shadow_compute_pipeline_layout,
+                    );
+
+                    (render_pipeline, shadow_compute_pipeline)
+                })
+                .unzip()
+        };
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(VERTICES),
@@ -498,7 +481,7 @@ impl State {
             queue,
             config,
             size,
-            render_pipeline,
+            render_pipelines,
             vertex_buffer,
             num_vertices,
             camera,
@@ -512,10 +495,15 @@ impl State {
             last_update,
             active_gamepad,
             gilrs_context,
-            shadow_compute_pipeline,
+            shadow_compute_pipelines,
             shadow_width,
             shadow_height,
             compute_bind_group,
+            pipeline_index: 0,
+            //pre_march_pipeline,
+            //pre_march_bind_group,
+            //pre_march_width,
+            //pre_march_height,
         }
     }
 
@@ -546,8 +534,12 @@ impl State {
             .as_secs_f32();
         self.camera_controller.update_camera(&mut self.camera);
         self.camera_uniform.update_view_proj(&self.camera);
-        self.player
-            .update(dt, &mut self.active_gamepad, &mut self.gilrs_context);
+        self.player.update(
+            dt,
+            &mut self.pipeline_index,
+            &mut self.active_gamepad,
+            &mut self.gilrs_context,
+        );
 
         let uniform = self.player.get_uniform();
 
@@ -560,8 +552,9 @@ impl State {
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let print_freq: u32 = 120;
+        let print_freq: u32 = 60;
         self.frames = (self.frames + 1) % print_freq as usize;
+
         if self.frames == 0 {
             println!(
                 "{:?}",
@@ -621,7 +614,7 @@ impl State {
                 label: Some("Shadow Compute pass"),
             });
             cpass.set_bind_group(0, &self.compute_bind_group, &[]);
-            cpass.set_pipeline(&self.shadow_compute_pipeline);
+            cpass.set_pipeline(&self.shadow_compute_pipelines[self.pipeline_index]);
             cpass.dispatch_workgroups(self.shadow_width, self.shadow_height, 1);
         }
 
@@ -650,7 +643,7 @@ impl State {
                 })],
                 depth_stencil_attachment: None,
             });
-            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_pipeline(&self.render_pipelines[self.pipeline_index]);
             render_pass.set_bind_group(0, &self.bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.draw(0..self.num_vertices, 0..1);
@@ -664,6 +657,74 @@ impl State {
 
         Ok(())
     }
+}
+
+fn make_compute_pipeline<'a>(
+    device: &wgpu::Device,
+    compute_source: impl Into<Cow<'a, str>>,
+    compute_pipeline_layout: &wgpu::PipelineLayout,
+) -> wgpu::ComputePipeline {
+    let compute_shader: wgpu::ShaderModule =
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Compute shader"),
+            source: wgpu::ShaderSource::Wgsl(compute_source.into()),
+        });
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Compute pipeline"),
+        layout: Some(compute_pipeline_layout),
+        module: &compute_shader,
+        entry_point: "compute_main",
+    })
+}
+
+fn make_render_pipeline(
+    device: &wgpu::Device,
+    fragment_vertex_source: String,
+    render_pipeline_layout: &wgpu::PipelineLayout,
+    config: &wgpu::SurfaceConfiguration,
+) -> wgpu::RenderPipeline {
+    let fragment_vertex_shader: wgpu::ShaderModule =
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Fragment and vertex shader"),
+            source: wgpu::ShaderSource::Wgsl(fragment_vertex_source.into()),
+        });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Render Pipeline"),
+        layout: Some(render_pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &fragment_vertex_shader,
+            entry_point: "vs_main",
+            buffers: &[Vertex::desc()],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &fragment_vertex_shader,
+            entry_point: "fs_main",
+            targets: &[Some(wgpu::ColorTargetState {
+                format: config.format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw, // 2.
+            cull_mode: Some(wgpu::Face::Back),
+            // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+            polygon_mode: wgpu::PolygonMode::Fill,
+            // Requires Features::DEPTH_CLIP_CONTROL
+            unclipped_depth: false,
+            // Requires Features::CONSERVATIVE_RASTERIZATION
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState {
+            count: 1,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+        multiview: None, // 5.
+    })
 }
 
 fn make_bind_group<const N: usize>(
@@ -851,17 +912,37 @@ impl PlayerController {
     fn update(
         &mut self,
         dt: f32,
+        pipeline_index: &mut usize,
         active_gamepad: &mut Option<gilrs::GamepadId>,
         gilrs_context: &mut gilrs::Gilrs,
     ) {
-        let dt = 0.2;
+        //let dt = 0.2;
         let max_acceleration = 0.02; //todo make dynamic based on distance to object/centre
-        let turn_factor = 0.3;
+        let turn_factor = 3.0;
 
         let p = self.state.w.truncate();
-        let s = 0.1; //sdf::sdf(p);
+        
+        let mut dt = dt;
+        let pipeline_swap_player_offset: cgmath::Vector3<f32> = {
+            if p.magnitude() < 0.1 {
+                *pipeline_index = (*pipeline_index + (NUM_SDF + 1)) % NUM_SDF;
+                dt *= 10.0;
+                println!("level+=1 -> {pipeline_index}");
+                p * 10.0 - p
+            } else if p.magnitude() > 1.0 {
+                *pipeline_index = (*pipeline_index + (NUM_SDF - 1)) % NUM_SDF;
+                dt /= 10.0;
+                println!("level-=1 -> {pipeline_index}");
+                p / 10.0 - p
 
-        let fac = s;
+            } else {
+                cgmath::Vector3::zero()
+            }
+        };
+
+        let s = 1.0; //sdf::sdf(p);
+
+        let translation_factor = s;
 
         //let decay = 0.2; (todo) // depend on acceleration?
 
@@ -972,7 +1053,11 @@ impl PlayerController {
         translation_input.z *= -1.0;
         let translation = cgmath::Matrix4::from_translation(
             /*(-self.state.z.truncate()) * */
-            (self.state * translation_input.extend(0.0)).truncate() * dt * fac * p.magnitude(),
+            pipeline_swap_player_offset
+                + (self.state * translation_input.extend(0.0)).truncate()
+                    * dt
+                    * translation_factor
+                    * p.magnitude(),
             //(-self.state.z.truncate()) * forward * dt * fac * p.magnitude(),
         );
 
@@ -1132,4 +1217,13 @@ mod sdf {
         let q = p.map(f32::abs) - b;
         q.map(|a| a.max(0.0)).magnitude() + q.x.max(q.y).max(q.z).min(0.0)
     }
+}
+
+fn sdf_wgsl_gen(max: usize) -> Vec<String> {
+    (0..max).map(|i| {
+        let sdf0 = i;
+        let sdf1 = (i+1)%max;
+        //format!("fn sdf(p: vec3<f32>) -> f32 {{ return min(sdf{sdf0}(p), sdf{sdf1}(p / 0.1) * 0.1); }}\n")
+        format!("fn sdf(p: vec3<f32>) -> f32 {{ return sdf{sdf0}(p); }}\n")
+    }).collect()
 }

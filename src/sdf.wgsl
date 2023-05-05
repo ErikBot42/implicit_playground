@@ -8,6 +8,12 @@ struct CameraUniform {
 fn sd_sphere(pos: vec3<f32>, r: f32) -> f32 {
     return length(pos) - r;
 }
+// a>0: a % b
+// a<0: a % b
+// a = sign(a) * abs(a)
+// fn modulo(v: f32, r: f32) -> f32 {
+//     return v % r + r * f32(v < 0.0);
+// }
 
 // mod space +- r around origin
 fn mod_space(v: f32, r: f32) -> f32 {
@@ -22,24 +28,73 @@ fn sphere_field(p: vec3<f32>) -> f32 {
             vec3<f32>(
                 mod_space(p.x + r, r), 
                 mod_space(p.y + r, r), 
-                mod_space(p.z + r, r)), 
+                mod_space(p.z + r, r)
+            ), 
             0.7*r
         );
-
 }
 
-fn sdf(p: vec3<f32>) -> f32 {
-    //return sd_frame_recursive(p);
-    return sd_menger_sponge(p);
-
-    //return sd_juliabulb(p);
-    //return sd_mandelbulb(p + vec3<f32>(0.0, 0.0, 1.0));
-    //return sd_box_frame(p, vec3<f32>(1.0), 0.3333);
-    //return sd_box_frame(p, vec3<f32>(1.0), 0.1);
-    //return sd_menger_recursive(p);
-    //return sd_menger(p);
-    //return sphere_field(p);
+// http://lolengine.net/blog/2013/07/27/rgb-to-hsv-in-glsl
+fn hsv_to_rgb(c: vec3<f32>) -> vec3<f32> {
+    var c = c;
+    let k = vec4<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    let p = abs(fract(c.xxx + k.xyz) * 6.0 - k.www);
+    return c.z * mix(k.xxx, clamp(vec3<f32>(p) - k.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
 }
+
+// ?? -> color
+fn color_transfer_function(p: vec3<f32>) -> vec3<f32> {
+    return hsv_to_rgb(vec3<f32>(max(max(p.x, p.y), p.z), 0.2, 1.0));
+}
+
+// point -> ??
+fn sdf_transfer_function(p: vec3<f32>) -> vec3<f32> {
+    return abs(p);
+}
+
+fn sdf_color(p: vec3<f32>) -> vec3<f32> {
+    if (length(p) < 0.2) {
+        return color_transfer_function(sdf_transfer_function(p * 10.0));
+    }
+    return color_transfer_function(sdf_transfer_function(p));
+}
+
+//fn sdf1(p: vec3<f32>) -> f32 { return sd_menger_sponge(p); }
+fn sdf2(p: vec3<f32>) -> f32 { return sd_mandelbulb(p + vec3<f32>(0.0, 0.0, 1.2)); }
+fn sdf3(p: vec3<f32>) -> f32 { return sd_menger_sponge(p); }
+fn sdf1(p: vec3<f32>) -> f32 { return sd_menger_sponge(p); }
+fn sdf0(p: vec3<f32>) -> f32 { 
+    var mandel_scale = -3.0;
+    
+    var scale = 0.3; 
+    if (mandel_scale > 0.0) {
+        mandel_scale+=2.0; 
+        scale/=(mandel_scale+1.0)/(mandel_scale- 1.0);
+    }
+	else {
+        mandel_scale-=1.0;
+    }
+
+    return sd_mandelbox(p / scale, mandel_scale) * scale;
+}
+
+//fn sdf(p: vec3<f32>) -> f32 {
+//    return min(sdf0(p), sdf1(p / 0.1) * 0.1);
+//
+//    //return min(, sdf1(p / sc) * sc); 
+//
+//
+//    //return sd_frame_recursive(p);
+//    //return sd_menger_sponge(p);
+//
+//    //return sd_juliabulb(p);
+//    //return sd_mandelbulb(p);// + vec3<f32>(0.0, 0.0, 1.0));
+//    //return sd_box_frame(p, vec3<f32>(1.0), 0.3333);
+//    //return sd_box_frame(p, vec3<f32>(1.0), 0.1);
+//    //return sd_menger_recursive(p);
+//    //return sd_menger(p);
+//    //return sphere_field(p);
+//}
 
 fn sd_juliabulb(p: vec3<f32>) -> f32 {
     var p = p;
@@ -275,8 +330,10 @@ fn sd_menger_sponge(p: vec3<f32>) -> f32 {
 
     var s = 1.0;
     var m: u32;
-    for(m = 0u; m < 4u; m++) {
-        let a = ((p * s + 2.0*64.0) % 2.0) - 1.0;
+
+    let f = 8.0;//64.0;
+    for(m = 0u; m < 1u; m++) {
+        let a = ((p * s + 2.0*f) % 2.0) - 1.0;
         s *= 3.0;
         let r = 1.0 - 3.0 * abs(a);
 
@@ -310,6 +367,149 @@ fn sd_box(p: vec3<f32>, b: vec3<f32>) -> f32 {
 
     //q.map(|a| a.max(0.0)).magnitude() + q.x.max(q.y).max(q.z).min(0.0)
 }
+
+
+fn sd_mandelbox(p: vec3<f32>, scale_factor: f32) -> f32 {
+    // http://blog.hvidtfeldts.net/index.php/2011/11/distance-estimated-3d-fractals-vi-the-mandelbox/
+    /*
+    let offset3 = p;
+    var p = p;
+    var dr = 1.0;//0;
+   
+    let iterations = 8;//4;//20;//14;
+    let fixedRadius = 1.0;
+    let minRadius = 0.5;
+
+    let fixedRadius2 = fixedRadius * fixedRadius;
+    let minRadius2 = minRadius * minRadius;
+
+    let a_scale_factor = abs(scale_factor);
+    
+
+    for(var i = 0; i < iterations; i++)
+    {
+        box_fold(&p, dr, 1.0);
+        sphere_fold(&p, &dr, minRadius2, fixedRadius2);
+
+        p = scale_factor * p + offset3;
+        dr = dr * a_scale_factor + 1.0;
+    }
+
+
+    let r = length(p);
+    return r / abs(dr);
+    */
+    return sd_mandelbox_optim2(p, scale_factor);
+}
+
+
+fn sd_mandelbox_optim(p: vec3<f32>, scale_factor: f32) -> f32 {
+    // http://blog.hvidtfeldts.net/index.php/2011/11/distance-estimated-3d-fractals-vi-the-mandelbox/
+
+    let offset3 = p;
+    let p = p;
+    let dr = 1.0;//0;
+
+   
+    let iterations = 8;//4;//20;//14;
+    let fixedRadius = 1.0;
+    let minRadius = 0.5;
+
+    let fixed_radius2 = fixedRadius * fixedRadius;
+    let min_radius2 = minRadius * minRadius;
+
+    let a_scale_factor = abs(scale_factor);
+    
+    var pr = vec4<f32>(p, 1.0);
+
+    for(var i = 0; i < iterations; i++)
+    {
+        { // box fold
+            pr = vec4<f32>(
+                    clamp(
+                        pr.xyz, 
+                        - vec3<f32>(1.0), 
+                        vec3<f32>(1.0)
+                    ) * 2.0 - pr.xyz, 
+                    pr.w
+                );
+        }
+
+        //sphere_fold(&p, &dr, minRadius2, fixedRadius2);
+
+        { // sphere fold
+            let r = length(pr.xyz);
+            let r2 = dot(pr.xyz,pr.xyz);
+
+            var factor = 1.0;
+            if (r < min_radius2) { 
+                factor = fixed_radius2 / min_radius2; // Inner scaling linear
+            } else if (r2 < fixed_radius2) {
+	        	factor = fixed_radius2 / r2; // Sphere inversion
+	        }
+            pr = pr * factor;
+            //p = p * factor;
+            //dr = dr * factor;
+        }
+
+        { // scale
+            pr = vec4<f32>(pr.xyz * scale_factor, pr.w);
+            pr.w = pr.w * a_scale_factor;
+
+            pr += vec4<f32>(offset3, 1.0);
+        }
+    }
+
+
+    let r = length(pr.xyz);
+    return r / abs(pr.w);
+}
+// http://www.fractalforums.com/3d-fractal-generation/a-mandelbox-distance-estimate-formula/msg21412/#msg21412
+fn sd_mandelbox_optim2(p: vec3<f32>, scale: f32) -> f32 { 
+    let iters = 6;
+    let mr2 = 0.5 * 0.5;
+    let scalevec = vec4<f32>(scale, scale, scale, abs(scale)) / mr2;
+    let c1 = abs(scale- 1.0);
+    let c2 = pow(abs(scale), 1.0 - f32(iters));
+
+    var p = vec4<f32>(p, 1.0);
+    let p0 = p;
+    for (var i=0; i<iters; i++) {
+        p = vec4<f32>(clamp(p.xyz, - vec3<f32>(1.0), vec3<f32>(1.0)) * 2.0 - p.xyz, p.w);
+        p = (p * clamp(max(mr2/dot(p.xyz, p.xyz), mr2), 0.0, 1.0)) * scalevec + p0; 
+    }
+    return (length(p.xyz) - c1) / p.w - c2;
+}
+
+
+//dist = fracMandelbox4(p, vSdfConfig.w, vSdfConfig.xyz)*scale;
+
+
+
+
+fn box_fold(p: ptr<function, vec3<f32>>, dz: f32,  folding_limit: f32) {
+    *p = clamp(*p, - vec3<f32>(folding_limit), vec3<f32>(folding_limit)) * 2.0 - *p;
+}
+fn sphere_fold(
+    p: ptr<function, vec3<f32>>, 
+    dz: ptr<function, f32>, 
+    min_radius2: f32, 
+    fixed_radius2: f32
+) {
+    let r = length(*p);
+    let r2 = dot(*p,*p);
+
+    var factor = 1.0;
+    if (r < min_radius2) { 
+        factor = fixed_radius2 / min_radius2; // Inner scaling linear
+    } else if (r2 < fixed_radius2) {
+		factor = fixed_radius2 / r2; // Sphere inversion
+	}
+    *p = (*p) * factor;
+    *dz = (*dz) * factor;
+}
+
+
 // END SDF PART
 
 struct TraceOutput {
