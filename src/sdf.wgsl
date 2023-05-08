@@ -61,9 +61,13 @@ fn sdf_color(p: vec3<f32>) -> vec3<f32> {
 
 //fn sdf1(p: vec3<f32>) -> f32 { return sd_menger_sponge(p); }
 fn sdf2(p: vec3<f32>) -> f32 { return sd_mandelbulb(p + vec3<f32>(0.0, 0.0, 1.2)); }
-fn sdf3(p: vec3<f32>) -> f32 { return sd_menger_sponge(p); }
-fn sdf1(p: vec3<f32>) -> f32 { return sd_menger_sponge(p); }
+fn sdf1(p: vec3<f32>) -> f32 { return sd_menger_sponge_2(p); }
 fn sdf0(p: vec3<f32>) -> f32 { 
+
+    //return min(sd_menger_sponge_2(p), sd_xyz(p));
+    return sd_menger_sponge_2(p);
+}
+fn sdf3(p: vec3<f32>) -> f32 { 
     var mandel_scale = -3.0;
     
     var scale = 0.3; 
@@ -71,11 +75,24 @@ fn sdf0(p: vec3<f32>) -> f32 {
         mandel_scale+=2.0; 
         scale/=(mandel_scale+1.0)/(mandel_scale- 1.0);
     }
-	else {
+    else {
         mandel_scale-=1.0;
     }
 
     return sd_mandelbox(p / scale, mandel_scale) * scale;
+}
+
+fn sd_xyz(p: vec3<f32>) -> f32 {
+    //let d1 = abs(sd_plane(p, vec3<f32>(1.0, 0.0, 0.0), 0.0));
+    //let d2 = abs(sd_plane(p, vec3<f32>(0.0, 1.0, 0.0), 0.0));
+    //let d3 = abs(sd_plane(p, vec3<f32>(0.0, 0.0, 1.0), 0.0));
+
+    //return min(d1, min(d2, d3));
+    return max(sd_cross_r(p, 0.1), -sd_sphere(p, 0.5));
+}
+
+fn sd_plane(p: vec3<f32>, n: vec3<f32>, h: f32) -> f32 {
+  return dot(p,n) + h;
 }
 
 //fn sdf(p: vec3<f32>) -> f32 {
@@ -101,7 +118,7 @@ fn sd_juliabulb(p: vec3<f32>) -> f32 {
     let power = 8.0;
     let c = vec3<f32>(0.5, 1.0, 0.7);
     // http://blog.hvidtfeldts.net/index.php/2011/09/distance-estimated-3d-fractals-v-the-mandelbulb-different-de-approximations/
-	//let time = 0.0;//_Time.z*2;
+    //let time = 0.0;//_Time.z*2;
     //float3 c = float3(sin(time*0.12354), sin(time*0.328432), sin(time*0.234723))*1;
     //float3 c = float3(sin(time),cos(time),sin(time*0.096234))*(sin(0.254*time)+1);
     var dr = 1.0;
@@ -120,37 +137,37 @@ fn sd_juliabulb(p: vec3<f32>) -> f32 {
             break;
         }
 
-		dr = pow(r, power - 1.0) * power * dr;
-		
-		p = pow3D_8(p, r);
+        dr = pow(r, power - 1.0) * power * dr;
+        
+        p = pow3D_8(p, r);
         p += c;
     }
     return 0.5 * log(r) * r / dr;
 }
 
 fn pow3D_8(p: vec3<f32>, r: f32) -> vec3<f32> {
-	let power = 8.0;
-	// xyz -> zr,theta,phi
-	var theta = acos( p.z / r );
-	var phi = atan2( p.y, p.x );
-
-	// scale and rotate
-	// this is the generalized operation
-	let zr = pow(r, power);
-	theta = theta * power;
-	phi = phi * power;
-
-	// polar -> xyz
-	//p = zr*float3(sin(theta)*cos(phi), sin(phi)*sin(theta), cos(theta));
-	return zr*vec3<f32>(
+    let power = 8.0;
+    // xyz -> zr,theta,phi
+    var theta = acos( p.z / r );
+    var phi = atan2( p.y, p.x );
+    
+    // scale and rotate
+    // this is the generalized operation
+    let zr = pow(r, power);
+    theta = theta * power;
+    phi = phi * power;
+    
+    // polar -> xyz
+    //p = zr*float3(sin(theta)*cos(phi), sin(phi)*sin(theta), cos(theta));
+    return zr*vec3<f32>(
         sin(theta) * cos(phi), 
         sin(phi) * sin(theta), 
         cos(theta)
     );
 
-	//https://www.iquilezles.org/www/articles/mandelbulb/mandelbulb.htm
+    //https://www.iquilezles.org/www/articles/mandelbulb/mandelbulb.htm
 
-	//float x = p.x; float x2 = x*x; float x4 = x2*x2;
+    //float x = p.x; float x2 = x*x; float x4 = x2*x2;
     //float y = p.y; float y2 = y*y; float y4 = y2*y2;
     //float z = p.z; float z2 = z*z; float z4 = z2*z2;
 
@@ -174,11 +191,11 @@ fn sd_mandelbulb(p: vec3<f32>) -> f32 {
 
     var z = p;
     var r2 = dot(z,z);
-	var dz = 1.0;
+    var dz = 1.0;
 
-	for(var i: i32 = 0; i < iterations; i++) {
+    for(var i: i32 = 0; i < iterations; i++) {
         
-		dz = power * pow(r2, half_power) * dz + 1.0;
+        dz = power * pow(r2, half_power) * dz + 1.0;
         let r = length(z);
         let theta = power * acos(z.z / r);
         let phi = power * atan2(z.y, z.x);
@@ -190,7 +207,7 @@ fn sd_mandelbulb(p: vec3<f32>) -> f32 {
             );
         
         r2 = dot(z, z);
-		if (r2 > bailout) {
+        if (r2 > bailout) {
             break;
         }
     }
@@ -206,33 +223,33 @@ fn sd_mandelbulb2(pos: vec3<f32>) -> f32 {
 
     let power = 4.0;
 
-	var z = pos;
-	var dr = 1.0;
-	var r = 0.0;
+    var z = pos;
+    var dr = 1.0;
+    var r = 0.0;
     var i: u32;
     
     i = 0u;
     loop {
 
-		r = length(z);
-		if (i >= iterations || r > bailout) {
+        r = length(z);
+        if (i >= iterations || r > bailout) {
             break;
         }
-		
-		// convert to polar coordinates
-		var theta = acos(z.z/r);
-		var phi = atan2(z.y,z.x);
+        
+        // convert to polar coordinates
+        var theta = acos(z.z/r);
+        var phi = atan2(z.y,z.x);
         // r^(pow-1)*pow*dr + 1.0
-		dr = pow(r, power - 1.0) * power * dr + 1.0;
-		
-		// scale and rotate the point
-		let zr = pow(r, power);
+        dr = pow(r, power - 1.0) * power * dr + 1.0;
+        
+        // scale and rotate the point
+        let zr = pow(r, power);
 
-		theta = theta * power;
-		phi = phi * power;
-		
-		// convert back to cartesian coordinates
-		z = pos + zr * 
+        theta = theta * power;
+        phi = phi * power;
+        
+        // convert back to cartesian coordinates
+        z = pos + zr * 
             vec3<f32>(
                 sin(theta) * cos(phi), 
                 sin(phi) * sin(theta), 
@@ -242,8 +259,8 @@ fn sd_mandelbulb2(pos: vec3<f32>) -> f32 {
         continuing {
             i++;
         }
-	}
-	return 0.5*log(r)*r/dr;
+    }
+    return 0.5*log(r)*r/dr;
 }
 
 fn sd_frame_recursive(p: vec3<f32>) -> f32 {
@@ -313,7 +330,7 @@ fn sdf_normal(p: vec3<f32>) -> vec3<f32> {
     return sdf_normal_e(p, 0.001);
 }
 
-fn sd_cross(p: vec3<f32>) -> f32 {
+fn sd_cross0(p: vec3<f32>) -> f32 {
     let r = 1.0;
     let px = abs(p.x);
     let py = abs(p.y);
@@ -324,6 +341,42 @@ fn sd_cross(p: vec3<f32>) -> f32 {
     let dc = max(pz,px);
     return min(da, min(db, dc)) - r;
 }
+fn sd_cross(p: vec3<f32>) -> f32 {
+    return sd_cross_r(p, 1.0);
+}
+fn sd_cross_r(p: vec3<f32>, r: f32) -> f32 {
+    let p = abs(p);
+    let d = max(p.xyz, p.yzx);
+    return min(d.x, min(d.y, d.z)) - r;
+}
+
+fn sd_menger_sponge_2(p: vec3<f32>) -> f32 {
+
+    let p = plane_fold(p, normalize(vec3<f32>(1.0, 2.0, 3.0)), -0.1);
+    
+    // can be any bounding sdf
+    var d = sd_box(p * 2.0 + vec3<f32>(0.1, 0.2, 0.3), vec3<f32>( 1.4, 1.09, 1.9));
+    //var d = sd_box(p * 2.0 , vec3<f32>( 1.0));
+
+
+
+    var s = 1.0;
+
+    for(var m=0; m<4; m++) {
+        let q = abs(1.0 - 3.0 * abs(fract(p * s) * 2.0 - 1.0));
+        let y = max(q.xyz, q.yzx);
+        let c = min(y.x, min(y.y, y.z)) - 1.0;
+
+        s *= 3.0;
+        d = max(d, c / s);
+    }
+
+    return d / 2.0;
+}
+
+fn plane_fold(p: vec3<f32>, n: vec3<f32>, d: f32) -> vec3<f32> {
+	return p - 2.0 * min(0.0,dot(p,n)-d)*n;
+}
 
 fn sd_menger_sponge(p: vec3<f32>) -> f32 {
     var d = sd_box(p, vec3<f32>(1.3, 0.9, 1.1));
@@ -331,9 +384,10 @@ fn sd_menger_sponge(p: vec3<f32>) -> f32 {
     var s = 1.0;
     var m: u32;
 
-    let f = 8.0;//64.0;
-    for(m = 0u; m < 1u; m++) {
-        let a = ((p * s + 2.0*f) % 2.0) - 1.0;
+    //let f = 8.0;//64.0;
+    for(m = 0u; m < 4u; m++) {
+        //let a = ((p * s + (2.0 * f)) % 2.0) - 1.0;
+        let a = (fract(p * s / 2.0) * 2.0) - 1.0;
         s *= 3.0;
         let r = 1.0 - 3.0 * abs(a);
 
@@ -445,8 +499,8 @@ fn sd_mandelbox_optim(p: vec3<f32>, scale_factor: f32) -> f32 {
             if (r < min_radius2) { 
                 factor = fixed_radius2 / min_radius2; // Inner scaling linear
             } else if (r2 < fixed_radius2) {
-	        	factor = fixed_radius2 / r2; // Sphere inversion
-	        }
+                factor = fixed_radius2 / r2; // Sphere inversion
+            }
             pr = pr * factor;
             //p = p * factor;
             //dr = dr * factor;
@@ -503,8 +557,8 @@ fn sphere_fold(
     if (r < min_radius2) { 
         factor = fixed_radius2 / min_radius2; // Inner scaling linear
     } else if (r2 < fixed_radius2) {
-		factor = fixed_radius2 / r2; // Sphere inversion
-	}
+        factor = fixed_radius2 / r2; // Sphere inversion
+    }
     *p = (*p) * factor;
     *dz = (*dz) * factor;
 }

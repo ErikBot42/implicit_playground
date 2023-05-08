@@ -4,10 +4,14 @@ var<uniform> camera: CameraUniform;
 
 @group(0) @binding(1) 
 var shadow_texture: texture_2d<f32>;
-//@group(0) @binding(2) 
-//var shadow_texture: texture_storage_2d<r32float, write>;
 @group(0) @binding(2) 
 var shadow_sampler: sampler;
+
+@group(0) @binding(3) 
+var pre_march_texture: texture_2d<f32>;
+@group(0) @binding(4) 
+var pre_march_sampler: sampler;
+
 
 struct VertexInput {
     @location(0) position: vec2<f32>,
@@ -83,11 +87,13 @@ fn vec3_to_f32_rand(co: vec3<f32>) -> f32 {
     return fract(sin(dot(co, vec3<f32>(3.12312, 12.9898, 78.233))) * 43758.5453);
 }
 
-fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, ray_area: f32) -> vec4<f32> {
-    let max_dist = t_max;
+fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, t_max_fog: f32, iter_pre: f32, ray_area: f32) -> vec4<f32> {
     var to = trace(ray_origin, ray_dir, t_min, t_max, 100u, ray_area * 0.5);//0.001);
-    let i = f32(to.i);
+    let i = f32(to.i) + iter_pre;
     let t = f32(to.t);
+
+
+
 
     //let n = vec3<f32>(0.0, 0.0, 0.0);
     //let n_t = normalize(
@@ -99,7 +105,7 @@ fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, 
 
     // try to maximize how much stuff the user sees while still hiding cutoff point
     //let fog = pow(min(t / max_dist, 1.0), 4.0);
-    let fog = pow(smoothstep(0.0, max_dist, t), 3.0); //10.0
+    let fog = pow(smoothstep(0.0, t_max_fog, t), 3.0); //10.0
     let fog_color = vec3<f32>(0.2);
     
     let p = ray_origin + t * ray_dir;
@@ -330,33 +336,30 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // img
     // cam
     
-
-    //let t = textureSample(shadow_texture, shadow_sampler, in.uv).r; 
-    //return vec4<f32>(t/20.0, 0.0, 0.0, 0.0);
+    var pre_march_sample = textureSample(pre_march_texture, pre_march_sampler, in.uv); 
+    let t_min = pre_march_sample.r;
+    //let t_min = in.initial_sdf;
+    let pre_march_iters = pre_march_sample.g;
+    //let pre_march_iters = 0.0;
+    
     
     
     // uv: [0..1] in xy directions
-
     let fov = 2.0; 
     let ratio = (in.clip_position.x / in.clip_position.y) / (in.uv.x / (1.0 - in.uv.y));
-    
-
     let ray_dir = (camera.view_proj * vec4<f32>(normalize(
             vec3<f32>((in.uv - 0.5) * vec2<f32>(ratio, 1.0) * fov, - 1.0)
         ), 0.0)).xyz;
     let ray_origin = (camera.view_proj * vec4<f32>(vec3<f32>(0.0), 1.0)).xyz;
+    let ray_area = 0.001;//length(fwidth(ray_dir)); // can optimize to omit sync here, also this is probably not fully correct
 
-
-
-    let ray_area = length(fwidth(ray_dir)); // can optimize to omit sync here, also this is probably not fully correct
-
+    let t_max = length(ray_origin) * 4.0;//in.initial_sdf * 5.0;
+    let t_max_fog = t_max;
+    return ray_color(ray_origin, ray_dir, t_min, t_max, t_max_fog, pre_march_iters, ray_area);
     
 
     //let t_max = 2.0;
     //let t_min = 0.0;//in.initial_sdf;
-    let t_max = length(ray_origin) * 4.0;//in.initial_sdf * 5.0;
-    let t_min = in.initial_sdf;
-    return ray_color(ray_origin, ray_dir, t_min, t_max, ray_area);
     //return vec4(vec3(length(ray_area)), 1.0);
     //return vec4<f32>(1.0/aspect_ratio, 1.0, 0.0, 1.0);
     //return vec4<f32>(ray_dir, 1.0);

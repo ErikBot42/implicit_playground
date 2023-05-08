@@ -5,7 +5,10 @@ use winit::{
     window::WindowBuilder,
 };
 
-use std::{borrow::Cow, time::Instant};
+//use std::time::Instant;
+use wasm_timer::Instant;
+
+use std::borrow::Cow;
 use std::{
     fs::read_to_string,
     mem::{replace, size_of},
@@ -118,12 +121,9 @@ struct State {
     vertex_buffer: wgpu::Buffer,
     num_vertices: u32,
 
-    camera: Camera,
-    camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     compute_bind_group: wgpu::BindGroup,
-    camera_controller: CameraController,
 
     last_frame_print: Instant,
     frames: usize,
@@ -139,10 +139,11 @@ struct State {
     shadow_width: u32,
     shadow_height: u32,
 
-    pipeline_index: usize, //pre_march_pipeline: wgpu::ComputePipeline,
-                           //pre_march_bind_group: wgpu::BindGroup,
-                           //pre_march_width: u32,
-                           //pre_march_height: u32,
+    pipeline_index: usize,
+    pre_march_pipelines: Vec<wgpu::ComputePipeline>,
+    pre_march_bind_group: wgpu::BindGroup,
+    pre_march_width: u32,
+    pre_march_height: u32,
 }
 
 impl State {
@@ -174,6 +175,8 @@ impl State {
             .next()
             .unwrap();
 
+        dbg!(adapter.features());
+        dbg!(wgpu::Limits::downlevel_webgl2_defaults());
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
@@ -182,8 +185,32 @@ impl State {
                     // we're building for the web we'll have to disable some.
                     limits: if cfg!(target_arch = "wasm32") {
                         wgpu::Limits::downlevel_webgl2_defaults()
+                        //wgpu::Limits::downlevel_defaults()
+                        // attempt to use more resonable defaults
+                        //wgpu::Limits::default()
                     } else {
-                        wgpu::Limits::default()
+                        // use strict web limits
+                        //wgpu::Limits::downlevel_webgl2_defaults()
+                        //wgpu::Limits::downlevel_defaults() // <- ok
+                        //wgpu::Limits::default()
+
+                        wgpu::Limits {
+                            max_uniform_buffers_per_shader_stage: 11,
+                            max_storage_buffers_per_shader_stage: 0,
+                            max_storage_textures_per_shader_stage: 1, // 0
+                            max_dynamic_storage_buffers_per_pipeline_layout: 0,
+                            max_storage_buffer_binding_size: 0,
+                            max_vertex_buffer_array_stride: 255,
+                            max_compute_workgroup_storage_size: 0,
+                            max_compute_invocations_per_workgroup: 1, // 0
+                            max_compute_workgroup_size_x: 1,          // 0
+                            max_compute_workgroup_size_y: 1,          // 0
+                            max_compute_workgroup_size_z: 1,          // 0
+                            max_compute_workgroups_per_dimension: 128, // 0
+
+                            // Most of the values should be the same as the downlevel defaults
+                            ..wgpu::Limits::downlevel_defaults()
+                        }
                     },
                     label: None,
                 },
@@ -191,6 +218,9 @@ impl State {
             )
             .await
             .unwrap();
+
+        dbg!(device.features());
+
         let gpu_get_device_timer_elapsed = gpu_get_device_timer_start.elapsed();
 
         let gpu_pipeline_setup_timer_start = Instant::now();
@@ -210,29 +240,14 @@ impl State {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::Immediate,//surface_caps.present_modes[0], // for example vsync/not vsync
+            present_mode: wgpu::PresentMode::Immediate, //surface_caps.present_modes[0], // for example vsync/not vsync
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
         };
 
-        let camera = Camera {
-            // position the camera one unit up and 2 units back
-            // +z is out of the screen
-            eye: (0.0, 1.0, 2.0).into(),
-            // have it look at the origin
-            target: (0.0, 0.0, 0.0).into(),
-            // which way is "up"
-            up: cgmath::Vector3::unit_y(),
-            aspect: config.width as f32 / config.height as f32,
-            fovy: 45.0,
-            znear: 0.1,
-            zfar: 100.0,
-            forward: 0.0,
-            turn: 0.0,
-            last_update: Instant::now(),
-        };
-        let mut camera_uniform = CameraUniform::new();
-        camera_uniform.update_view_proj(&camera);
+
+        let player = PlayerController::new();
+        let camera_uniform = player.get_uniform();
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
             contents: bytemuck::cast_slice(&[camera_uniform]),
@@ -241,8 +256,6 @@ impl State {
 
         let shadow_height = 100;
         let shadow_width = 100;
-        //let shadow_elements = shadow_width * shadow_height;
-        //let shadow: Vec<f32> = (0..shadow_elements).map(|_| 0_f32).collect();
         let shadow_texture: wgpu::Texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Shadow Texture"),
             size: wgpu::Extent3d {
@@ -269,7 +282,7 @@ impl State {
             ..Default::default()
         });
 
-        /*let pre_march_height = 72; //  9 * 8
+        let pre_march_height = 72; //  9 * 8
         let pre_march_width = 128; // 16 * 8
 
         let pre_march_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -296,9 +309,7 @@ impl State {
             min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
-        });*/
-
-        //let camera_buffer_binding = camera_buffer.as_entire_binding();
+        });
 
         let (bind_group, bind_group_layout): (wgpu::BindGroup, wgpu::BindGroupLayout) = {
             make_bind_group(
@@ -327,6 +338,20 @@ impl State {
                         wgpu::ShaderStages::FRAGMENT,
                         wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                         wgpu::BindingResource::Sampler(&shadow_sampler),
+                    ),
+                    (
+                        wgpu::ShaderStages::FRAGMENT,
+                        wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        },
+                        wgpu::BindingResource::TextureView(&pre_march_texture_view),
+                    ),
+                    (
+                        wgpu::ShaderStages::FRAGMENT,
+                        wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        wgpu::BindingResource::Sampler(&pre_march_sampler),
                     ),
                 ],
             )
@@ -360,8 +385,8 @@ impl State {
                 ],
             )
         };
-        /*let (pre_march_bind_group, pre_march_bind_group_layout) = make_bind_group(
-            "Shadow",
+        let (pre_march_bind_group, pre_march_bind_group_layout) = make_bind_group(
+            "pre march",
             &device,
             [
                 (
@@ -383,31 +408,16 @@ impl State {
                     camera_buffer.as_entire_binding(),
                 ),
             ],
-        );*/
+        );
 
         surface.configure(&device, &config);
 
-        //let pre_march_source = read_to_string("src/sdf.wgsl").unwrap()
-        //    + &read_to_string("src/pre_march.wgsl").unwrap();
-
-        /*let pre_march_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Pre march shader"),
-            source: wgpu::ShaderSource::Wgsl(pre_march_source.into()),
-        });*/
-
-        /*let pre_march_pipeline_layout =
+        let pre_march_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Pre march pipeline layout"),
                 bind_group_layouts: &[&pre_march_bind_group_layout],
                 push_constant_ranges: &[],
             });
-        let pre_march_pipeline: wgpu::ComputePipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("Pre march pipeline"),
-                layout: Some(&pre_march_pipeline_layout),
-                module: &pre_march_shader,
-                entry_point: "compute_main",
-            });*/
 
         let render_pipeline_layout: wgpu::PipelineLayout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -423,35 +433,47 @@ impl State {
                 push_constant_ranges: &[],
             });
 
-        let (render_pipelines, shadow_compute_pipelines): (Vec<_>, Vec<_>) = {
+        let (render_pipelines, shadow_compute_pipelines, pre_march_pipelines): (
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+        ) = {
             let sdf_lib_source = read_to_string("src/sdf.wgsl").unwrap();
             let fragment_vertex_source = read_to_string("src/shader.wgsl").unwrap();
             let compute_source = read_to_string("src/compute.wgsl").unwrap();
+            let pre_march_source = read_to_string("src/pre_march.wgsl").unwrap();
 
-            sdf_wgsl_gen(NUM_SDF)
-                .iter()
-                .map(|sdf_prefix| {
-                    let fragment_vertex_source: String =
-                        sdf_prefix.clone() + &sdf_lib_source + &fragment_vertex_source;
-                    let compute_source: String =
-                        sdf_prefix.clone() + &sdf_lib_source + &compute_source;
+            itertools::multiunzip(sdf_wgsl_gen(NUM_SDF).iter().map(|sdf_prefix| {
+                let fragment_vertex_source: String =
+                    sdf_prefix.clone() + &sdf_lib_source + &fragment_vertex_source;
+                let compute_source: String = sdf_prefix.clone() + &sdf_lib_source + &compute_source;
+                let pre_march_source: String =
+                    sdf_prefix.clone() + &sdf_lib_source + &pre_march_source;
 
-                    let render_pipeline = make_render_pipeline(
-                        &device,
-                        fragment_vertex_source,
-                        &render_pipeline_layout,
-                        &config,
-                    );
-                    //println!("{compute_source}");
-                    let shadow_compute_pipeline = make_compute_pipeline(
-                        &device,
-                        compute_source,
-                        &shadow_compute_pipeline_layout,
-                    );
+                let render_pipeline = make_render_pipeline(
+                    &device,
+                    fragment_vertex_source,
+                    &render_pipeline_layout,
+                    &config,
+                );
+                //println!("{compute_source}");
+                let shadow_compute_pipeline =
+                    make_compute_pipeline(&device, compute_source, &shadow_compute_pipeline_layout);
 
-                    (render_pipeline, shadow_compute_pipeline)
-                })
-                .unzip()
+                let pre_march_pipeline =
+                    make_compute_pipeline(&device, pre_march_source, &pre_march_pipeline_layout);
+
+                /*let pre_march_pipeline: wgpu::ComputePipeline =
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("Pre march pipeline"),
+                    layout: Some(&pre_march_pipeline_layout),
+                    module: &pre_march_shader,
+                    entry_point: "compute_main",
+                });*/
+
+                (render_pipeline, shadow_compute_pipeline, pre_march_pipeline)
+            }))
+            //.unzip()
         };
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
@@ -460,9 +482,7 @@ impl State {
         });
         let num_vertices = VERTICES.len() as u32;
 
-        let camera_controller = CameraController::new(0.2);
         let last_frame = Instant::now();
-        let player = PlayerController::new();
 
         let last_update = Instant::now();
 
@@ -484,11 +504,8 @@ impl State {
             render_pipelines,
             vertex_buffer,
             num_vertices,
-            camera,
-            camera_uniform,
             camera_buffer,
             bind_group,
-            camera_controller,
             last_frame_print: last_frame,
             frames: 0,
             player,
@@ -500,10 +517,10 @@ impl State {
             shadow_height,
             compute_bind_group,
             pipeline_index: 0,
-            //pre_march_pipeline,
-            //pre_march_bind_group,
-            //pre_march_width,
-            //pre_march_height,
+            pre_march_pipelines,
+            pre_march_bind_group,
+            pre_march_width,
+            pre_march_height,
         }
     }
 
@@ -525,15 +542,13 @@ impl State {
 
     // was an input fully processed?
     fn input(&mut self, event: &WindowEvent) -> bool {
-        self.player.process_events(event) && self.camera_controller.process_events(event)
+        self.player.process_events(event) 
     }
 
     fn update(&mut self) {
         let dt = replace(&mut self.last_update, Instant::now())
             .elapsed()
             .as_secs_f32();
-        self.camera_controller.update_camera(&mut self.camera);
-        self.camera_uniform.update_view_proj(&self.camera);
         self.player.update(
             dt,
             &mut self.pipeline_index,
@@ -546,7 +561,6 @@ impl State {
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
-            //bytemuck::cast_slice(&[self.camera_uniform]),
             bytemuck::cast_slice(&[uniform]),
         );
     }
@@ -561,43 +575,6 @@ impl State {
                 replace(&mut self.last_frame_print, Instant::now()).elapsed() / print_freq
             );
         }
-        /*
-            [src/lib.rs:544] self.surface.get_current_texture() = Ok(
-            SurfaceTexture {
-                texture: Texture {
-                    context: Context {
-                        type: "Native",
-                    },
-                    id: ObjectId {
-                        id: Some(
-                            2305844009941073922,
-                        ),
-                    },
-                    data: Any { .. },
-                    owned: false,
-                    descriptor: TextureDescriptor {
-                        label: None,
-                        size: Extent3d {
-                            width: 958,
-                            height: 1030,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: D2,
-                        format: Bgra8UnormSrgb,
-                        usage: TextureUsages(
-                            RENDER_ATTACHMENT,
-                        ),
-                        view_formats: [],
-                    },
-                },
-                suboptimal: false,
-                presented: false,
-                detail: Any { .. },
-            },
-        )
-        */
 
         let output: wgpu::SurfaceTexture = self.surface.get_current_texture()?;
         let view = output
@@ -618,11 +595,15 @@ impl State {
             cpass.dispatch_workgroups(self.shadow_width, self.shadow_height, 1);
         }
 
-        //let mut encoder: wgpu::CommandEncoder =
-        //    self.device
-        //        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        //            label: Some("Render Encoder"),
-        //        });
+        {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Pre march pass"),
+            });
+            cpass.set_bind_group(0, &self.pre_march_bind_group, &[]);
+            cpass.set_pipeline(&self.pre_march_pipelines[self.pipeline_index]);
+            cpass.dispatch_workgroups(self.pre_march_width, self.pre_march_height, 1);
+        }
+
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -631,13 +612,13 @@ impl State {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         // skip clearing buffer
-                        load: wgpu::LoadOp::Load,
-                        //load: wgpu::LoadOp::Clear(wgpu::Color {
-                        //    r: 0.1,
-                        //    g: 0.2,
-                        //    b: 0.3,
-                        //    a: 1.0,
-                        //}),
+                        //load: wgpu::LoadOp::Load,
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.5,
+                            g: 0.5,
+                            b: 0.5,
+                            a: 0.5,
+                        }),
                         store: true,
                     },
                 })],
@@ -797,36 +778,14 @@ const VERTICES: &[Vertex] = {
     ]
 };
 
-#[derive(Debug)]
-struct Camera {
-    eye: cgmath::Point3<f32>,
-    target: cgmath::Point3<f32>,
-    up: cgmath::Vector3<f32>,
-    aspect: f32,
-    fovy: f32,
-    znear: f32,
-    zfar: f32,
-    forward: f32,
-    turn: f32,
-    last_update: Instant,
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct TestUniform {
+    view_proj: [[f32; 4]; 4],
+    random_norm: [f32; 4],
 }
 
-impl Camera {
-    fn build_view_projection_matrix(&self) -> cgmath::Matrix4<f32> {
-        let view = cgmath::Matrix4::look_at_rh(self.eye, self.target, self.up);
-        let proj = cgmath::perspective(cgmath::Deg(self.fovy), self.aspect, self.znear, self.zfar);
 
-        cgmath::Matrix4::from_translation(cgmath::Vector3::new(0.0, 0.0, self.forward))
-            * cgmath::Matrix4::from_angle_y(cgmath::Deg(self.turn))
-            * cgmath::Matrix4::from_angle_x(cgmath::Deg(0.0))
-
-        //cgmath::Matrix4::from_translation(cgmath::Vector3::new(0.0, 0.0, 0.3))
-        //    * cgmath::Matrix4::from_angle_y(cgmath::Deg(45.0))
-        //    * cgmath::Matrix4::from_angle_x(cgmath::Deg(45.0))
-
-        //OPENGL_TO_WGPU_MATRIX;// * proj * view;
-    }
-}
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
@@ -837,14 +796,6 @@ impl CameraUniform {
         Self {
             view_proj: mat.into(),
         }
-    }
-    fn new() -> Self {
-        Self {
-            view_proj: cgmath::Matrix4::identity().into(),
-        }
-    }
-    fn update_view_proj(&mut self, camera: &Camera) {
-        self.view_proj = camera.build_view_projection_matrix().into();
     }
 }
 
@@ -869,7 +820,6 @@ struct PlayerController {
 }
 impl PlayerController {
     fn new() -> Self {
-        use cgmath::SquareMatrix;
         Self {
             velocity: 0.0,
             key_up: false,
@@ -921,23 +871,22 @@ impl PlayerController {
         let turn_factor = 3.0;
 
         let p = self.state.w.truncate();
-        
+
         let mut dt = dt;
         let pipeline_swap_player_offset: cgmath::Vector3<f32> = {
-            if p.magnitude() < 0.1 {
-                *pipeline_index = (*pipeline_index + (NUM_SDF + 1)) % NUM_SDF;
-                dt *= 10.0;
-                println!("level+=1 -> {pipeline_index}");
-                p * 10.0 - p
-            } else if p.magnitude() > 1.0 {
-                *pipeline_index = (*pipeline_index + (NUM_SDF - 1)) % NUM_SDF;
-                dt /= 10.0;
-                println!("level-=1 -> {pipeline_index}");
-                p / 10.0 - p
-
-            } else {
+            //if p.magnitude() < 0.1 {
+            //    *pipeline_index = (*pipeline_index + (NUM_SDF + 1)) % NUM_SDF;
+            //    dt *= 10.0;
+            //    println!("level+=1 -> {pipeline_index}");
+            //    p * 10.0 - p
+            //} else if p.magnitude() > 1.0 {
+            //    *pipeline_index = (*pipeline_index + (NUM_SDF - 1)) % NUM_SDF;
+            //    dt /= 10.0;
+            //    println!("level-=1 -> {pipeline_index}");
+            //    p / 10.0 - p
+            //} else {
                 cgmath::Vector3::zero()
-            }
+            //}
         };
 
         let s = 1.0; //sdf::sdf(p);
@@ -1075,84 +1024,9 @@ impl PlayerController {
     }
 }
 
-#[derive(Debug)]
-struct CameraController {
-    speed: f32,
-    forward: bool,
-    backward: bool,
-    left: bool,
-    right: bool,
-}
-impl CameraController {
-    fn new(speed: f32) -> Self {
-        Self {
-            speed,
-            forward: false,
-            backward: false,
-            left: false,
-            right: false,
-        }
-    }
-    fn process_events(&mut self, event: &WindowEvent) -> bool {
-        match event {
-            WindowEvent::KeyboardInput {
-                input:
-                    KeyboardInput {
-                        state,
-                        virtual_keycode: Some(keycode),
-                        ..
-                    },
-                ..
-            } => {
-                let is_pressed = *state == ElementState::Pressed;
-                use VirtualKeyCode::*;
-                match keycode {
-                    W | Up => {
-                        self.forward = is_pressed;
-                        true
-                    }
-                    A | Left => {
-                        self.left = is_pressed;
-                        true
-                    }
-                    S | Down => {
-                        self.backward = is_pressed;
-                        true
-                    }
-                    D | Right => {
-                        self.right = is_pressed;
-                        true
-                    }
-                    _ => false,
-                }
-            }
-            _ => false,
-        }
-    }
-
-    fn update_camera(&self, camera: &mut Camera) {
-        //use cgmath::InnerSpace;
-
-        let dt = replace(&mut camera.last_update, Instant::now())
-            .elapsed()
-            .as_secs_f32();
-
-        if self.forward {
-            camera.forward += dt;
-        }
-        if self.backward {
-            camera.forward -= dt;
-        }
-        if self.right {
-            camera.turn += 180.0 * dt
-        }
-        if self.left {
-            camera.turn -= 180.0 * dt
-        }
-    }
-}
 
 mod sdf {
+    #![allow(unused)]
     use cgmath::*;
     fn sd_sphere(pos: Vector3<f32>, r: f32) -> f32 {
         pos.magnitude() - r
@@ -1220,10 +1094,12 @@ mod sdf {
 }
 
 fn sdf_wgsl_gen(max: usize) -> Vec<String> {
-    (0..max).map(|i| {
-        let sdf0 = i;
-        let sdf1 = (i+1)%max;
-        //format!("fn sdf(p: vec3<f32>) -> f32 {{ return min(sdf{sdf0}(p), sdf{sdf1}(p / 0.1) * 0.1); }}\n")
-        format!("fn sdf(p: vec3<f32>) -> f32 {{ return sdf{sdf0}(p); }}\n")
-    }).collect()
+    (0..max)
+        .map(|i| {
+            let sdf0 = i;
+            let sdf1 = (i + 1) % max;
+            //format!("fn sdf(p: vec3<f32>) -> f32 {{ return min(sdf{sdf0}(p), sdf{sdf1}(p / 0.1) * 0.1); }}\n")
+            format!("fn sdf(p: vec3<f32>) -> f32 {{ return sdf{sdf0}(p); }}\n")
+        })
+        .collect()
 }

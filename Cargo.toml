@@ -9,8 +9,8 @@ version = "0.1.0"
 edition = "2021"
 #codegen-backend = "cranelift"
 
-#[lib]
-#crate-type = ["cdylib", "rlib"]
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 #[profile.dev]
 #opt-level = 3
@@ -45,6 +45,8 @@ pollster = "0.3.0"
 bytemuck = { version = "1.13.1", features = [ "derive" ] }
 cgmath = "0.18.0"
 gilrs = "0.10.2"
+itertools = "0.10.5"
+wasm-timer = "0.2.5"
 #glm = "0.2.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
