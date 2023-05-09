@@ -53,7 +53,11 @@ wasm-timer = "0.2.5"
 console_error_panic_hook = "0.1.7" # panic to javascript console
 console_log = "1.0.0" # log to javascript console
 wgpu = { version = "0.16.0", features = [
-    "webgl" # support browsers without WebGPU API (TODO: attempt remove this)
+    "wgsl",
+    "trace",
+    "webgl", # support browsers without WebGPU API (TODO: attempt remove this)
+    "replay",
+    "wgc",
 ]}
 wasm-bindgen = "0.2.84" # generate interop between wasm and rust
 wasm-bindgen-futures = "0.4.34"  
@@ -61,6 +65,7 @@ web-sys = { version = "0.3.61", features = [ # javascript methods in rust
     "Document", 
     "Window", 
     "Element",
+    "console",
 ]}
 
 

@@ -22,11 +22,35 @@ const NUM_SDF: usize = 4;
 // # for plain html:
 // `~/.cargo/bin/wasm-pack build --target web`
 
+fn print_universal(s: impl Into<String>) {
+
+    let s: String = s.into();
+
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::log_1(&s.into());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        println!("{}", String::from(s));
+    }
+}
+
+macro_rules! dbgu {
+    ($($tts:tt)*) => {
+        let s = format!("{:#?}", $($tts)*);
+        print_universal(s);
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub async fn run() {
+
+
     cfg_if::cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
             std::panic::set_hook(Box::new(console_error_panic_hook::hook));
@@ -149,6 +173,9 @@ struct State {
 impl State {
     // Creating some of the wgpu types requires async code
     async fn new(window: Window) -> Self {
+
+        print_universal("HELLO WORLD");
+
         let gpu_get_device_timer_start = Instant::now();
 
         let size: winit::dpi::PhysicalSize<u32> = window.inner_size();
@@ -166,6 +193,18 @@ impl State {
         // State owns the window so this should be safe.
         let surface: wgpu::Surface = unsafe { instance.create_surface(&window) }.unwrap();
 
+    //instance.enumerate_adapters(wgpu::Backends::all());
+    //
+        instance.enumerate_adapters(wgpu::Backends::all()).for_each(|adapter| { 
+
+            dbgu!(adapter);
+
+            dbgu!(adapter.get_info());
+
+
+
+        } );
+
         let adapter: wgpu::Adapter = instance
             .enumerate_adapters(wgpu::Backends::all())
             .find(|adapter| {
@@ -174,24 +213,10 @@ impl State {
             })
             .unwrap();
 
-        dbg!(adapter.features());
-        dbg!(wgpu::Limits::downlevel_webgl2_defaults());
-        let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    features: wgpu::Features::empty(),
-                    // WebGL doesn't support all of wgpu's features, so if
-                    // we're building for the web we'll have to disable some.
-                    limits: if cfg!(target_arch = "wasm32") {
-                        wgpu::Limits::downlevel_webgl2_defaults()
-                        //wgpu::Limits::downlevel_defaults()
-                        // attempt to use more resonable defaults
-                        //wgpu::Limits::default()
-                    } else {
-                        // use strict web limits
-                        //wgpu::Limits::downlevel_webgl2_defaults()
-                        //wgpu::Limits::downlevel_defaults() // <- ok
-                        //wgpu::Limits::default()
+        dbgu!(adapter.features());
+        dbgu!(wgpu::Limits::downlevel_webgl2_defaults());
+
+        let min_limit_needed = 
 
                         wgpu::Limits {
                             max_uniform_buffers_per_shader_stage: 11,
@@ -209,7 +234,28 @@ impl State {
 
                             // Most of the values should be the same as the downlevel defaults
                             ..wgpu::Limits::downlevel_defaults()
-                        }
+                        };
+        
+        dbgu!("requesting device...");
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    features: wgpu::Features::empty(),
+                    // WebGL doesn't support all of wgpu's features, so if
+                    // we're building for the web we'll have to disable some.
+                    limits: if cfg!(target_arch = "wasm32") {
+                        //wgpu::Limits::downlevel_webgl2_defaults()
+                        //wgpu::Limits::downlevel_defaults()
+                        // attempt to use more resonable defaults
+                        //wgpu::Limits::default()
+                        min_limit_needed
+                    } else {
+                        // use strict web limits
+                        //wgpu::Limits::downlevel_webgl2_defaults()
+                        //wgpu::Limits::downlevel_defaults() // <- ok
+                        //wgpu::Limits::default()
+                        min_limit_needed
+
                     },
                     label: None,
                 },
@@ -218,7 +264,7 @@ impl State {
             .await
             .unwrap();
 
-        dbg!(device.features());
+        dbgu!(device.features());
 
         let gpu_get_device_timer_elapsed = gpu_get_device_timer_start.elapsed();
 
