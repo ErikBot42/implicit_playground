@@ -168,11 +168,10 @@ impl State {
 
         let adapter: wgpu::Adapter = instance
             .enumerate_adapters(wgpu::Backends::all())
-            .filter(|adapter| {
+            .find(|adapter| {
                 // Check if this adapter supports our surface
                 adapter.is_surface_supported(&surface)
             })
-            .next()
             .unwrap();
 
         dbg!(adapter.features());
@@ -874,19 +873,19 @@ impl PlayerController {
 
         let mut dt = dt;
         let pipeline_swap_player_offset: cgmath::Vector3<f32> = {
-            //if p.magnitude() < 0.1 {
-            //    *pipeline_index = (*pipeline_index + (NUM_SDF + 1)) % NUM_SDF;
-            //    dt *= 10.0;
-            //    println!("level+=1 -> {pipeline_index}");
-            //    p * 10.0 - p
-            //} else if p.magnitude() > 1.0 {
-            //    *pipeline_index = (*pipeline_index + (NUM_SDF - 1)) % NUM_SDF;
-            //    dt /= 10.0;
-            //    println!("level-=1 -> {pipeline_index}");
-            //    p / 10.0 - p
-            //} else {
-                cgmath::Vector3::zero()
-            //}
+            if p.magnitude() < 0.1 {
+                *pipeline_index = (*pipeline_index + (NUM_SDF + 1)) % NUM_SDF;
+                dt *= 10.0;
+                println!("level+=1 -> {pipeline_index}");
+                p * 10.0 - p
+            } else if p.magnitude() > 1.0 {
+                *pipeline_index = (*pipeline_index + (NUM_SDF - 1)) % NUM_SDF;
+                dt /= 10.0;
+                println!("level-=1 -> {pipeline_index}");
+                p / 10.0 - p
+            } else {
+              cgmath::Vector3::zero()
+            }
         };
 
         let s = 1.0; //sdf::sdf(p);
@@ -1098,8 +1097,8 @@ fn sdf_wgsl_gen(max: usize) -> Vec<String> {
         .map(|i| {
             let sdf0 = i;
             let sdf1 = (i + 1) % max;
-            //format!("fn sdf(p: vec3<f32>) -> f32 {{ return min(sdf{sdf0}(p), sdf{sdf1}(p / 0.1) * 0.1); }}\n")
-            format!("fn sdf(p: vec3<f32>) -> f32 {{ return sdf{sdf0}(p); }}\n")
+            format!("fn sdf(p: vec3<f32>) -> f32 {{ return min(sdf{sdf0}(p), sdf{sdf1}(p / 0.1) * 0.1); }}\n")
+            //format!("fn sdf(p: vec3<f32>) -> f32 {{ return sdf{sdf0}(p); }}\n")
         })
         .collect()
 }
