@@ -23,9 +23,7 @@ const NUM_SDF: usize = 4;
 // `~/.cargo/bin/wasm-pack build --target web`
 
 fn print_universal(s: impl Into<String>) {
-
     let s: String = s.into();
-
 
     #[cfg(target_arch = "wasm32")]
     {
@@ -49,8 +47,6 @@ use wasm_bindgen::prelude::*;
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub async fn run() {
-
-
     cfg_if::cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
             std::panic::set_hook(Box::new(console_error_panic_hook::hook));
@@ -173,17 +169,18 @@ struct State {
 impl State {
     // Creating some of the wgpu types requires async code
     async fn new(window: Window) -> Self {
-
         print_universal("HELLO WORLD");
 
         let gpu_get_device_timer_start = Instant::now();
 
         let size: winit::dpi::PhysicalSize<u32> = window.inner_size();
 
+        let enabled_backends = wgpu::Backends::all(); // & (!wgpu::Backends::GL);
+
         // The instance is a handle to our GPU
         // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
         let instance: wgpu::Instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends: enabled_backends,
             dx12_shader_compiler: Default::default(),
         });
 
@@ -193,49 +190,47 @@ impl State {
         // State owns the window so this should be safe.
         let surface: wgpu::Surface = unsafe { instance.create_surface(&window) }.unwrap();
 
-    //instance.enumerate_adapters(wgpu::Backends::all());
-    //
-        instance.enumerate_adapters(wgpu::Backends::all()).for_each(|adapter| { 
-
-            dbgu!(adapter);
-
-            dbgu!(adapter.get_info());
-
-
-
-        } );
-
-        let adapter: wgpu::Adapter = instance
+        //instance.enumerate_adapters(wgpu::Backends::all());
+        //
+        instance
             .enumerate_adapters(wgpu::Backends::all())
+            .for_each(|adapter| {
+                dbgu!(adapter);
+                dbgu!(adapter.get_info());
+            });
+
+        dbgu!("selecting adapter...");
+        let adapter: wgpu::Adapter = instance
+            .enumerate_adapters(enabled_backends)
             .find(|adapter| {
+                dbgu!(adapter);
                 // Check if this adapter supports our surface
                 adapter.is_surface_supported(&surface)
             })
             .unwrap();
+        dbgu!("selected adapter");
 
         dbgu!(adapter.features());
         dbgu!(wgpu::Limits::downlevel_webgl2_defaults());
 
-        let min_limit_needed = 
+        let min_limit_needed = wgpu::Limits {
+            max_uniform_buffers_per_shader_stage: 11,
+            max_storage_buffers_per_shader_stage: 0,
+            max_storage_textures_per_shader_stage: 1, // 0
+            max_dynamic_storage_buffers_per_pipeline_layout: 0,
+            max_storage_buffer_binding_size: 0,
+            max_vertex_buffer_array_stride: 255,
+            max_compute_workgroup_storage_size: 0,
+            max_compute_invocations_per_workgroup: 1,  // 0
+            max_compute_workgroup_size_x: 1,           // 0
+            max_compute_workgroup_size_y: 1,           // 0
+            max_compute_workgroup_size_z: 1,           // 0
+            max_compute_workgroups_per_dimension: 128, // 0
 
-                        wgpu::Limits {
-                            max_uniform_buffers_per_shader_stage: 11,
-                            max_storage_buffers_per_shader_stage: 0,
-                            max_storage_textures_per_shader_stage: 1, // 0
-                            max_dynamic_storage_buffers_per_pipeline_layout: 0,
-                            max_storage_buffer_binding_size: 0,
-                            max_vertex_buffer_array_stride: 255,
-                            max_compute_workgroup_storage_size: 0,
-                            max_compute_invocations_per_workgroup: 1, // 0
-                            max_compute_workgroup_size_x: 1,          // 0
-                            max_compute_workgroup_size_y: 1,          // 0
-                            max_compute_workgroup_size_z: 1,          // 0
-                            max_compute_workgroups_per_dimension: 128, // 0
+            // Most of the values should be the same as the downlevel defaults
+            ..wgpu::Limits::downlevel_defaults()
+        };
 
-                            // Most of the values should be the same as the downlevel defaults
-                            ..wgpu::Limits::downlevel_defaults()
-                        };
-        
         dbgu!("requesting device...");
         let (device, queue) = adapter
             .request_device(
@@ -255,7 +250,6 @@ impl State {
                         //wgpu::Limits::downlevel_defaults() // <- ok
                         //wgpu::Limits::default()
                         min_limit_needed
-
                     },
                     label: None,
                 },
@@ -289,7 +283,6 @@ impl State {
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
         };
-
 
         let player = PlayerController::new();
         let camera_uniform = player.get_uniform();
@@ -587,7 +580,7 @@ impl State {
 
     // was an input fully processed?
     fn input(&mut self, event: &WindowEvent) -> bool {
-        self.player.process_events(event) 
+        self.player.process_events(event)
     }
 
     fn update(&mut self) {
@@ -603,11 +596,8 @@ impl State {
 
         let uniform = self.player.get_uniform();
 
-        self.queue.write_buffer(
-            &self.camera_buffer,
-            0,
-            bytemuck::cast_slice(&[uniform]),
-        );
+        self.queue
+            .write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[uniform]));
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -830,7 +820,6 @@ struct TestUniform {
     random_norm: [f32; 4],
 }
 
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
@@ -854,6 +843,7 @@ pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
 
 struct PlayerController {
     velocity: f32, // forward speed, also controls rotational speed.
+    time: f32,
     key_up: bool,
     key_down: bool,
     key_left: bool,
@@ -874,6 +864,7 @@ impl PlayerController {
             key_forward: false,
             key_back: false,
             state: cgmath::Matrix4::from_translation(cgmath::Vector3::new(0.0, 0.0, 0.5)),
+            time: 0.0,
         }
     }
     fn process_events(&mut self, event: &WindowEvent) -> bool {
@@ -930,7 +921,7 @@ impl PlayerController {
                 println!("level-=1 -> {pipeline_index}");
                 p / 10.0 - p
             } else {
-              cgmath::Vector3::zero()
+                cgmath::Vector3::zero()
             }
         };
 
@@ -1068,7 +1059,6 @@ impl PlayerController {
         CameraUniform::from_mat(self.state)
     }
 }
-
 
 mod sdf {
     #![allow(unused)]
