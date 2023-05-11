@@ -44,7 +44,7 @@ fn hsv_to_rgb(c: vec3<f32>) -> vec3<f32> {
 
 // ?? -> color
 fn color_transfer_function(p: vec3<f32>) -> vec3<f32> {
-    return hsv_to_rgb(vec3<f32>(max(max(p.x, p.y), p.z), 0.2, 1.0));
+    return hsv_to_rgb(vec3<f32>(max(max(p.x, p.y), p.z), 0.5, 1.0));
 }
 
 // point -> ??

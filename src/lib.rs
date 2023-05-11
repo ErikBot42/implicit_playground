@@ -844,12 +844,21 @@ pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
 struct PlayerController {
     velocity: f32, // forward speed, also controls rotational speed.
     time: f32,
+
     key_up: bool,
     key_down: bool,
+
     key_left: bool,
     key_right: bool,
+
     key_forward: bool,
     key_back: bool,
+
+    key_turn_up: bool,
+    key_turn_down: bool,
+
+    key_turn_left: bool,
+    key_turn_right: bool,
 
     state: cgmath::Matrix4<f32>,
 }
@@ -857,14 +866,18 @@ impl PlayerController {
     fn new() -> Self {
         Self {
             velocity: 0.0,
+            time: 0.0,
             key_up: false,
             key_down: false,
             key_left: false,
             key_right: false,
             key_forward: false,
             key_back: false,
+            key_turn_up: false,
+            key_turn_down: false,
+            key_turn_left: false,
+            key_turn_right: false,
             state: cgmath::Matrix4::from_translation(cgmath::Vector3::new(0.0, 0.0, 0.5)),
-            time: 0.0,
         }
     }
     fn process_events(&mut self, event: &WindowEvent) -> bool {
@@ -887,6 +900,10 @@ impl PlayerController {
                     Right | D => Some(&mut self.key_right),
                     Space => Some(&mut self.key_up),
                     LControl | LShift => Some(&mut self.key_down),
+                    I => Some(&mut self.key_turn_up),
+                    K => Some(&mut self.key_turn_down),
+                    J => Some(&mut self.key_turn_left),
+                    L => Some(&mut self.key_turn_right),
                     _ => None,
                 }
                 .map(|k| *k = s)
@@ -899,7 +916,7 @@ impl PlayerController {
         &mut self,
         dt: f32,
         pipeline_index: &mut usize,
-        active_gamepad: &mut Option<gilrs::GamepadId>,
+        _active_gamepad: &mut Option<gilrs::GamepadId>,
         gilrs_context: &mut gilrs::Gilrs,
     ) {
         //let dt = 0.2;
@@ -933,19 +950,27 @@ impl PlayerController {
 
         let range = |a, b| (a as i32 - b as i32) as f32;
 
-        let mut translation_input: cgmath::Vector3<f32> = cgmath::Vector3::zero();
-        let mut rotation_input: cgmath::Vector3<f32> = cgmath::Vector3::zero();
+        let mut rotation_input = cgmath::Vector3::new(
+            range(self.key_turn_right, self.key_turn_left),
+            range(self.key_turn_up, self.key_turn_down),
+            0.0,
+        );
 
-        let mut right = range(self.key_right, self.key_left);
-        let mut forward = range(self.key_forward, self.key_back);
-        let mut up = range(self.key_up, self.key_down);
-
-        translation_input += cgmath::Vector3::new(right, up, forward);
+        let mut translation_input = cgmath::Vector3::new(
+            range(self.key_right, self.key_left),
+            range(self.key_up, self.key_down),
+            range(self.key_forward, self.key_back),
+        );
 
         {
             //use gilrs::{Button, Event, Gilrs};
             //let mut gilrs = Gilrs::new().unwrap();
-            while let Some(gilrs::Event { id, event, time }) = gilrs_context.next_event() {
+            while let Some(gilrs::Event {
+                id: _,
+                event: _,
+                time: _,
+            }) = gilrs_context.next_event()
+            {
                 //println!("{:?} {}: {:?}", time, id, event);
             }
 
@@ -958,13 +983,10 @@ impl PlayerController {
             }
 
             for (_id, gamepad) in gilrs_context.gamepads() {
-                //println!("{} is {:?}", gamepad.name(), gamepad.power_info());
                 use gilrs::ev::Axis::*;
                 use gilrs::ev::Button::*;
                 translation_input += cgmath::Vector3::new(
                     gamepad.value(LeftStickX),
-                    //gamepad.value(RightStickY),
-                    //
                     (gamepad
                         .button_data(RightTrigger2)
                         .map(|b| b.value())
@@ -982,7 +1004,6 @@ impl PlayerController {
                                 .map(|b| b.value())
                                 .unwrap_or(0.0)),
                     gamepad.value(LeftStickY),
-                    //gamepad.value(RightZ), // - gamepad.value(LeftZ),
                 );
 
                 rotation_input += cgmath::Vector3::new(
@@ -990,26 +1011,6 @@ impl PlayerController {
                     gamepad.value(RightStickY),
                     0.0,
                 )
-
-                //println!(
-                //    "{}\n",
-                //    [
-                //        LeftStickX,
-                //        LeftStickY,
-                //        LeftZ,
-                //        RightStickX,
-                //        RightStickY,
-                //        RightZ,
-                //        DPadX,
-                //        DPadY
-                //    ].into_iter()
-                //    .map(|a| format!("{:?} {:?}\n", a, gamepad.value(a)))
-                //    .fold(String::new(), |a, b| a + &b),
-                //);
-
-                //right += gamepad.value(LeftStickX);
-                //forward += gamepad.value(RightStickY);
-                //up += gamepad.value(LeftStickY);
             }
         }
 
@@ -1024,16 +1025,11 @@ impl PlayerController {
         rotation_input = rotation_input.map(deadzone);
         translation_input = translation_input.map(deadzone);
 
-        let da = dt * max_acceleration * forward;
-        self.velocity += da;
-        self.velocity *= 0.99;
-
-        let rotation = cgmath::Matrix4::from_angle_y(cgmath::Rad(-right * dt * turn_factor))
-            * cgmath::Matrix4::from_angle_x(cgmath::Rad(up * dt * turn_factor));
+        cgmath::Quaternion::from_angle_y(cgmath::Rad(0.0));
 
         let rotation =
-            cgmath::Matrix4::from_angle_y(cgmath::Rad(-rotation_input.x * dt * turn_factor))
-                * cgmath::Matrix4::from_angle_x(cgmath::Rad(rotation_input.y * dt * turn_factor));
+            cgmath::Matrix4::from_angle_x(cgmath::Rad(rotation_input.y * dt * turn_factor))
+                * cgmath::Matrix4::from_angle_y(cgmath::Rad(-rotation_input.x * dt * turn_factor));
 
         translation_input.z *= -1.0;
         let translation = cgmath::Matrix4::from_translation(
