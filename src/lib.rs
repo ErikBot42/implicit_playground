@@ -841,8 +841,12 @@ pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
     0.0, 0.0, 0.5, 1.0,
 );
 
+const ZERO_EULER: cgmath::Euler<cgmath::Rad<f32>> =
+    cgmath::Euler::new(cgmath::Rad(0.0), cgmath::Rad(0.0), cgmath::Rad(0.0));
+const ZERO_VECTOR3: cgmath::Vector3<f32> = cgmath::Vector3::new(0.0, 0.0, 0.0);
+const ZERO_QUATERNION: cgmath::Quaternion<f32> = cgmath::Quaternion::from_sv(1.0, ZERO_VECTOR3);
+
 struct PlayerController {
-    velocity: f32, // forward speed, also controls rotational speed.
     time: f32,
 
     key_up: bool,
@@ -861,11 +865,16 @@ struct PlayerController {
     key_turn_right: bool,
 
     state: cgmath::Matrix4<f32>,
+
+    position: cgmath::Vector3<f32>,
+    velocity: cgmath::Vector3<f32>,
+    
+    rotation: cgmath::Quaternion<f32>,
+    rotation_velocity: cgmath::Quaternion<f32>,
 }
 impl PlayerController {
     fn new() -> Self {
         Self {
-            velocity: 0.0,
             time: 0.0,
             key_up: false,
             key_down: false,
@@ -878,6 +887,10 @@ impl PlayerController {
             key_turn_left: false,
             key_turn_right: false,
             state: cgmath::Matrix4::from_translation(cgmath::Vector3::new(0.0, 0.0, 0.5)),
+            position: cgmath::Vector3::new(0.0, 0.0, 0.5),
+            velocity: ZERO_VECTOR3,
+            rotation: ZERO_QUATERNION,
+            rotation_velocity: ZERO_QUATERNION,
         }
     }
     fn process_events(&mut self, event: &WindowEvent) -> bool {
@@ -953,7 +966,7 @@ impl PlayerController {
         let mut rotation_input = cgmath::Vector3::new(
             range(self.key_turn_right, self.key_turn_left),
             range(self.key_turn_up, self.key_turn_down),
-            0.0,
+            -self.state.x.y * 1.0, // < 0.0 { 0.1 } else { -0.1 },
         );
 
         let mut translation_input = cgmath::Vector3::new(
@@ -1025,13 +1038,42 @@ impl PlayerController {
         rotation_input = rotation_input.map(deadzone);
         translation_input = translation_input.map(deadzone);
 
-        cgmath::Quaternion::from_angle_y(cgmath::Rad(0.0));
+        use core::ops::Mul;
 
-        let rotation =
-            cgmath::Matrix4::from_angle_x(cgmath::Rad(rotation_input.y * dt * turn_factor))
-                * cgmath::Matrix4::from_angle_y(cgmath::Rad(-rotation_input.x * dt * turn_factor));
+        let rotation_euler = cgmath::Euler::new(
+            cgmath::Rad(dt * 0.1 * turn_factor * rotation_input.y),
+            cgmath::Rad(dt * 0.1 * turn_factor * -rotation_input.x),
+            cgmath::Rad(dt * 0.1 * turn_factor * rotation_input.z),
+        );
+
+        self.rotation_velocity = self.rotation_velocity * cgmath::Quaternion::from(rotation_euler);
+
+        self.rotation_velocity = self.rotation_velocity.slerp(
+            cgmath::Quaternion::from(cgmath::Euler::new(
+                cgmath::Rad(0.0),
+                cgmath::Rad(0.0),
+                cgmath::Rad(0.0),
+            )),
+            dt * 4.0,
+        );
+
+        let foo = cgmath::Decomposed {
+            scale: 1.0,
+            rot: cgmath::Quaternion::from(cgmath::Euler::new(
+                cgmath::Rad(0.0),
+                cgmath::Rad(0.0),
+                cgmath::Rad(0.0),
+            )),
+            disp: cgmath::Vector3::new(0.0, 0.0, 0.5),
+        };
+
+        self.state = foo.into();
+
+        //let rotation = cgmath::Matrix4::from(rotation_euler);
+        let rotation = cgmath::Matrix4::from(self.rotation_velocity);
 
         translation_input.z *= -1.0;
+
         let translation = cgmath::Matrix4::from_translation(
             /*(-self.state.z.truncate()) * */
             pipeline_swap_player_offset
