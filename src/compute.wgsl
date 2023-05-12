@@ -15,10 +15,10 @@ fn compute_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let ray_dir = normalize(vec3<f32>(uv, - 1.0));
     let ray_origin = vec3<f32>(0.0, 0.0, 0.0);
     
-    let to = trace(
+    let to = trace_outer(
         ray_origin, 
         ray_dir, 
-        0.1 * length((camera.view_proj * vec4<f32>(vec3<f32>(0.0), 1.0)).xyz), 
+        0.1,// * length((camera.view_proj * vec4<f32>(vec3<f32>(0.0), 1.0)).xyz), 
         20.0, 
         200u, 
         0.001

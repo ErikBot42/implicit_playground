@@ -1,7 +1,10 @@
 // Sdf functions and things that purely depend on sdf
 
+//TODO scale ray instead of sdf?
+
 struct CameraUniform {
     view_proj: mat4x4<f32>,
+    d1: vec4<f32>,
 };
 
 
@@ -64,22 +67,22 @@ fn sdf2(p: vec3<f32>) -> f32 { return sd_mandelbulb(p + vec3<f32>(0.0, 0.0, 1.2)
 fn sdf1(p: vec3<f32>) -> f32 { return sd_menger_sponge_2(p); }
 fn sdf0(p: vec3<f32>) -> f32 { 
 
+    //return sd_menger_recursive(p);
     //return min(sd_menger_sponge_2(p), sd_xyz(p));
     return sd_menger_sponge_2(p);
 }
 fn sdf3(p: vec3<f32>) -> f32 { 
-    var mandel_scale = -3.0;
+    var mandel_scale = camera.d1.w;//-3.0 + 1.0 + camera.d1.x;
     
     var scale = 0.3; 
     if (mandel_scale > 0.0) {
         mandel_scale+=2.0; 
         scale/=(mandel_scale+1.0)/(mandel_scale- 1.0);
-    }
-    else {
+    } else {
         mandel_scale-=1.0;
     }
 
-    return sd_mandelbox(p / scale, mandel_scale) * scale;
+    return sd_mandelbox_optim2(p / scale, mandel_scale) * scale;
 }
 
 fn sd_xyz(p: vec3<f32>) -> f32 {
@@ -93,6 +96,34 @@ fn sd_xyz(p: vec3<f32>) -> f32 {
 
 fn sd_plane(p: vec3<f32>, n: vec3<f32>, h: f32) -> f32 {
   return dot(p,n) + h;
+}
+
+fn bound_sphere(ray_origin: vec3<f32>, ray_direction: vec3<f32>, center: vec3<f32>, radius: f32) -> vec2<f32> {
+    let oc = ray_origin - center;
+    let b = dot(oc, ray_direction);
+    let c = dot(oc, oc) - radius * radius;
+    let h = b * b - c;
+    if( h<0.0 ) {
+        return vec2<f32>(-1.0); 
+    } else {
+        let h = sqrt(h);
+        // start, end 
+        return vec2<f32>(-b - h, -b + h);
+    }
+
+}
+
+fn bound_box(ray_origin: vec3<f32>, ray_direction: vec3<f32>, size: vec3<f32>) -> vec2<f32> {
+    let m = 1.0 / ray_direction; 
+    let n = m * ray_origin;  
+
+    let k = abs(m) * size;
+    let t1 = -n - k;
+    let t2 = -n + k;
+    let tN = max(max( t1.x, t1.y), t1.z);
+    let tF = min(min( t2.x, t2.y), t2.z);
+    if (tN>tF || tF<0.0) { return vec2<f32>(-1.0); }
+    return vec2<f32>( tN, tF );
 }
 
 //fn sdf(p: vec3<f32>) -> f32 {
@@ -352,7 +383,10 @@ fn sd_cross_r(p: vec3<f32>, r: f32) -> f32 {
 
 fn sd_menger_sponge_2(p: vec3<f32>) -> f32 {
 
-    let p = plane_fold(p, normalize(vec3<f32>(1.0, 2.0, 3.0)), -0.1);
+    let scale = 1.3;//1.9/1.0;
+
+
+    let p = scale * abs(plane_fold(p, camera.d1.xyz, 0.0));
     
     // can be any bounding sdf
     var d = sd_box(p * 2.0 + vec3<f32>(0.1, 0.2, 0.3), vec3<f32>( 1.4, 1.09, 1.9));
@@ -371,7 +405,7 @@ fn sd_menger_sponge_2(p: vec3<f32>) -> f32 {
         d = max(d, c / s);
     }
 
-    return d / 2.0;
+    return d / 2.0 / scale;
 }
 
 fn plane_fold(p: vec3<f32>, n: vec3<f32>, d: f32) -> vec3<f32> {
@@ -643,8 +677,37 @@ fn trace_simple(ro: vec3<f32>, rd: vec3<f32>, t_min: f32, t_max: f32, iterations
     to.last_tol = cur_tol;
     return to;
 }
+fn trace_simple_outer(ro: vec3<f32>, rd: vec3<f32>, t_min: f32, t_max: f32, iterations: u32, tol: f32) -> TraceOutput {
+    var i = 0u;
+    var t = t_min;
+    var s = 0.0;
+    var cur_tol = 0.0;
+    loop {
+
+        let p = ro + t * rd;
+
+        s = sdf_outer(p);
+
+        t += s;
+        
+        cur_tol = tol * t;
+        if (i > iterations || t_max < t || s < cur_tol) {
+            break;
+        }
+        i++;
+    }
+    var to: TraceOutput;
+    to.t = t;
+    to.i = i;
+    to.last_s = s;
+    to.last_tol = cur_tol;
+    return to;
+}
 fn trace(ro: vec3<f32>, rd: vec3<f32>, t_min: f32, t_max: f32, iterations: u32, tol: f32) -> TraceOutput {
     return trace_simple(ro, rd, t_min, t_max, iterations, tol);
+}
+fn trace_outer(ro: vec3<f32>, rd: vec3<f32>, t_min: f32, t_max: f32, iterations: u32, tol: f32) -> TraceOutput {
+    return trace_simple_outer(ro, rd, t_min, t_max, iterations, tol);
 }
 
 fn old_trace(origin: vec3<f32>, dir: vec3<f32>, t_max: f32, iterations: u32, tol: f32) -> TraceOutput {

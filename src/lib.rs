@@ -593,22 +593,21 @@ impl State {
             &mut self.active_gamepad,
             &mut self.gilrs_context,
         );
-
-        let uniform = self.player.get_uniform();
-
-        self.queue
-            .write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[uniform]));
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        let uniform = self.player.get_uniform();
+        self.queue
+            .write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[uniform]));
+
         let print_freq: u32 = 60;
         self.frames = (self.frames + 1) % print_freq as usize;
 
         if self.frames == 0 {
-            println!(
-                "{:?}",
-                replace(&mut self.last_frame_print, Instant::now()).elapsed() / print_freq
-            );
+            let frame_period =
+                replace(&mut self.last_frame_print, Instant::now()).elapsed() / print_freq;
+            let fps = 1.0 / frame_period.as_secs_f32();
+            println!("fps: {fps:.1}, ({frame_period:?})",);
         }
 
         let output: wgpu::SurfaceTexture = self.surface.get_current_texture()?;
@@ -824,11 +823,13 @@ struct TestUniform {
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
+    d1: [f32; 4],
 }
 impl CameraUniform {
-    fn from_mat(mat: cgmath::Matrix4<f32>) -> Self {
+    fn from_mat_data(mat: cgmath::Matrix4<f32>, d1: [f32; 4]) -> Self {
         Self {
             view_proj: mat.into(),
+            d1,
         }
     }
 }
@@ -868,9 +869,11 @@ struct PlayerController {
 
     position: cgmath::Vector3<f32>,
     velocity: cgmath::Vector3<f32>,
-    
+
     rotation: cgmath::Quaternion<f32>,
     rotation_velocity: cgmath::Quaternion<f32>,
+
+    d1: [f32; 4],
 }
 impl PlayerController {
     fn new() -> Self {
@@ -891,38 +894,39 @@ impl PlayerController {
             velocity: ZERO_VECTOR3,
             rotation: ZERO_QUATERNION,
             rotation_velocity: ZERO_QUATERNION,
+            d1: [0.0; 4],
         }
     }
     fn process_events(&mut self, event: &WindowEvent) -> bool {
-        match event {
-            WindowEvent::KeyboardInput {
-                input:
-                    KeyboardInput {
-                        state,
-                        virtual_keycode: Some(keycode),
-                        ..
-                    },
-                ..
-            } => {
-                let s = *state == ElementState::Pressed;
-                use VirtualKeyCode::*;
-                match keycode {
-                    Up | W => Some(&mut self.key_forward),
-                    Down | S => Some(&mut self.key_back),
-                    Left | A => Some(&mut self.key_left),
-                    Right | D => Some(&mut self.key_right),
-                    Space => Some(&mut self.key_up),
-                    LControl | LShift => Some(&mut self.key_down),
-                    I => Some(&mut self.key_turn_up),
-                    K => Some(&mut self.key_turn_down),
-                    J => Some(&mut self.key_turn_left),
-                    L => Some(&mut self.key_turn_right),
-                    _ => None,
-                }
-                .map(|k| *k = s)
-                .is_some()
+        if let WindowEvent::KeyboardInput {
+            input:
+                KeyboardInput {
+                    state,
+                    virtual_keycode: Some(keycode),
+                    ..
+                },
+            ..
+        } = event
+        {
+            let s = *state == ElementState::Pressed;
+            use VirtualKeyCode::*;
+            match keycode {
+                Up | W => Some(&mut self.key_forward),
+                Down | S => Some(&mut self.key_back),
+                Left | A => Some(&mut self.key_left),
+                Right | D => Some(&mut self.key_right),
+                Space => Some(&mut self.key_up),
+                LControl | LShift => Some(&mut self.key_down),
+                I => Some(&mut self.key_turn_up),
+                K => Some(&mut self.key_turn_down),
+                J => Some(&mut self.key_turn_left),
+                L => Some(&mut self.key_turn_right),
+                _ => None,
             }
-            _ => false,
+            .map(|k| *k = s)
+            .is_some()
+        } else {
+            false
         }
     }
     fn update(
@@ -932,41 +936,39 @@ impl PlayerController {
         _active_gamepad: &mut Option<gilrs::GamepadId>,
         gilrs_context: &mut gilrs::Gilrs,
     ) {
-        //let dt = 0.2;
-        let max_acceleration = 0.02; //todo make dynamic based on distance to object/centre
-        let turn_factor = 3.0;
-
-        let p = self.state.w.truncate();
-
-        let mut dt = dt;
-        let pipeline_swap_player_offset: cgmath::Vector3<f32> = {
-            if p.magnitude() < 0.1 {
-                *pipeline_index = (*pipeline_index + (NUM_SDF + 1)) % NUM_SDF;
-                dt *= 10.0;
-                println!("level+=1 -> {pipeline_index}");
-                p * 10.0 - p
-            } else if p.magnitude() > 1.0 {
-                *pipeline_index = (*pipeline_index + (NUM_SDF - 1)) % NUM_SDF;
-                dt /= 10.0;
-                println!("level-=1 -> {pipeline_index}");
-                p / 10.0 - p
+        fn tri_wave(a: f32) -> f32 {
+            let a = a.rem_euclid(4.0);
+            if a < 2.0 {
+                a - 1.0 // -1 -> 1
             } else {
-                cgmath::Vector3::zero()
+                -a + 3.0
             }
+        }
+        self.time += dt;
+
+        let tri = {
+            let f = 8.0;
+            self.time = self.time.rem_euclid(4.0 * f);
+            tri_wave(self.time / f)
         };
 
-        let s = 1.0; //sdf::sdf(p);
-
-        let translation_factor = s;
-
-        //let decay = 0.2; (todo) // depend on acceleration?
+        self.position = if self.position.magnitude() < 0.1 {
+            *pipeline_index = (*pipeline_index + (NUM_SDF + 1)) % NUM_SDF;
+            println!("level+=1 -> {pipeline_index}");
+            self.position * 10.0
+        } else if self.position.magnitude() > 1.0 {
+            *pipeline_index = (*pipeline_index + (NUM_SDF - 1)) % NUM_SDF;
+            println!("level-=1 -> {pipeline_index}");
+            self.position / 10.0
+        } else {
+            self.position
+        };
 
         let range = |a, b| (a as i32 - b as i32) as f32;
-
         let mut rotation_input = cgmath::Vector3::new(
             range(self.key_turn_right, self.key_turn_left),
-            range(self.key_turn_up, self.key_turn_down),
-            -self.state.x.y * 1.0, // < 0.0 { 0.1 } else { -0.1 },
+            range(self.key_turn_up, self.key_turn_down) + self.state.z.y * 0.3,
+            -self.state.x.y * 1.0,
         );
 
         let mut translation_input = cgmath::Vector3::new(
@@ -976,8 +978,6 @@ impl PlayerController {
         );
 
         {
-            //use gilrs::{Button, Event, Gilrs};
-            //let mut gilrs = Gilrs::new().unwrap();
             while let Some(gilrs::Event {
                 id: _,
                 event: _,
@@ -985,14 +985,6 @@ impl PlayerController {
             }) = gilrs_context.next_event()
             {
                 //println!("{:?} {}: {:?}", time, id, event);
-            }
-
-            fn value_with_deadzone(
-                gamepad: gilrs::Gamepad,
-                deadzone: f32,
-                axis: gilrs::ev::Axis,
-            ) -> f32 {
-                gamepad.value(axis)
             }
 
             for (_id, gamepad) in gilrs_context.gamepads() {
@@ -1038,12 +1030,10 @@ impl PlayerController {
         rotation_input = rotation_input.map(deadzone);
         translation_input = translation_input.map(deadzone);
 
-        use core::ops::Mul;
-
         let rotation_euler = cgmath::Euler::new(
-            cgmath::Rad(dt * 0.1 * turn_factor * rotation_input.y),
-            cgmath::Rad(dt * 0.1 * turn_factor * -rotation_input.x),
-            cgmath::Rad(dt * 0.1 * turn_factor * rotation_input.z),
+            cgmath::Rad(dt * 0.3 * rotation_input.y),
+            cgmath::Rad(dt * 0.3 * -rotation_input.x),
+            cgmath::Rad(dt * 0.3 * rotation_input.z),
         );
 
         self.rotation_velocity = self.rotation_velocity * cgmath::Quaternion::from(rotation_euler);
@@ -1069,32 +1059,46 @@ impl PlayerController {
 
         self.state = foo.into();
 
-        //let rotation = cgmath::Matrix4::from(rotation_euler);
-        let rotation = cgmath::Matrix4::from(self.rotation_velocity);
-
         translation_input.z *= -1.0;
 
-        let translation = cgmath::Matrix4::from_translation(
-            /*(-self.state.z.truncate()) * */
-            pipeline_swap_player_offset
-                + (self.state * translation_input.extend(0.0)).truncate()
-                    * dt
-                    * translation_factor
-                    * p.magnitude(),
-            //(-self.state.z.truncate()) * forward * dt * fac * p.magnitude(),
-        );
+        let translation_local_player =
+            (self.state * translation_input.extend(0.0)).truncate() * dt * 0.1;
 
-        //let total = trans * rot;
+        self.rotation = self.rotation * self.rotation_velocity;
+        self.velocity += self.rotation * translation_local_player;
+        //+ (0.05 / sdf::sdf(self.position)).min(0.2)
+        //    * sdf::sdf_normal(self.position, 0.001)
+        //    * dt;
+        self.velocity *= 0.5_f32.powf(dt);
+        self.position += self.velocity * dt * self.position.magnitude();
 
-        self.state = translation * self.state * rotation;
-        //self.state = total;
+        // manage floating point errors
+        self.rotation /= self.rotation.magnitude();
+        self.rotation_velocity /= self.rotation_velocity.magnitude();
 
-        //cgmath::Matrix4::from_translation(cgmath::Vector3::new(0.0, 0.0, self.forward))
-        //    * cgmath::Matrix4::from_angle_y(cgmath::Deg(self.turn))
-        //    * cgmath::Matrix4::from_angle_x(cgmath::Deg(0.0))
+        self.d1[3] = tri * 3.0 - 1.0;
+
+        self.d1[0] = (0.125 * self.time * std::f32::consts::PI).sin();
+        self.d1[1] = (0.125 * self.time * std::f32::consts::PI).cos();
+        self.d1[2] = (0.125 * self.time * std::f32::consts::PI * 0.5).sin();
+
+        let f = 1.0
+            / (self.d1[0] * self.d1[0] + self.d1[1] * self.d1[1] + self.d1[2] * self.d1[2]).sqrt();
+
+        self.d1[0] *= f;
+        self.d1[1] *= f;
+        self.d1[2] *= f;
+
+        dbg!(self.d1[0]);
+        self.state = cgmath::Decomposed {
+            scale: 1.0,
+            rot: self.rotation,
+            disp: self.position,
+        }
+        .into();
     }
     fn get_uniform(&self) -> CameraUniform {
-        CameraUniform::from_mat(self.state)
+        CameraUniform::from_mat_data(self.state, self.d1)
     }
 }
 
@@ -1129,6 +1133,21 @@ mod sdf {
         //sphere_field(p)
         //sd_menger(p)
         sd_menger_recursive(p)
+    }
+
+    pub(crate) fn sdf_normal(p: Vector3<f32>, h: f32) -> Vector3<f32> {
+        let x = 1.0;
+        let a = -1.0;
+        let v: Vector3<f32> = [
+            Vector3::new(x, a, a),
+            Vector3::new(a, x, a),
+            Vector3::new(a, a, x),
+            Vector3::new(x, x, x),
+        ]
+        .into_iter()
+        .map(|a| a * sdf(p + a * h))
+        .sum();
+        v / v.magnitude()
     }
 
     fn sd_menger_recursive(p: Vector3<f32>) -> f32 {
@@ -1171,7 +1190,18 @@ fn sdf_wgsl_gen(max: usize) -> Vec<String> {
         .map(|i| {
             let sdf0 = i;
             let sdf1 = (i + 1) % max;
-            format!("fn sdf(p: vec3<f32>) -> f32 {{ return min(sdf{sdf0}(p), sdf{sdf1}(p / 0.1) * 0.1); }}\n")
+            format!(
+                "
+fn sdf(p: vec3<f32>) -> f32 {{ 
+    return min(sdf{sdf0}(p), sdf{sdf1}(p / 0.1) * 0.1); 
+}}
+
+fn sdf_outer(p: vec3<f32>) -> f32 {{
+    return sdf{sdf0}(p);
+}}
+
+"
+            )
             //format!("fn sdf(p: vec3<f32>) -> f32 {{ return sdf{sdf0}(p); }}\n")
         })
         .collect()
