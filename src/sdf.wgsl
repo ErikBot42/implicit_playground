@@ -403,37 +403,12 @@ fn sd_menger_sponge_2(p: vec3<f32>) -> f32 {
 
         var n: vec3<f32>;
 
-        //n = normalize(vec3<f32>(0.0, -1.0, 1.0));
-	    //p -= 2.0 * min(0.0,dot(p, n)) * n;
-        //n = normalize(vec3<f32>(-1.0, 0.0, 1.0));
-	    //p -= 2.0 * min(0.0,dot(p, n)) * n;
-        //n = normalize(vec3<f32>(-1.0, 1.0, 0.0));
-	    //p -= 2.0 * min(0.0,dot(p, n)) * n;
+        let q = p;
 
-	    //return p - 2.0 * min(0.0,dot(p,n)-d)*n;
-        
-        //normalize(vec3<f32>(0.0, -1.0, 1.0));
-	    p -= min(0.0, -p.y + p.z) * vec3<f32>(0.0, - 1.0, 1.0);
+	    p -= min(0.0, - q.y + q.z ) * vec3<f32>(0.0, - 1.0, 1.0);
+	    p -= min(0.0, - q.x + q.z ) * vec3<f32>( - 1.0, 0.0, 1.0);
+	    p -= min(0.0, - q.x + q.y ) * vec3<f32>( - 1.0, 1.0, 0.0);
 
-
-        //n = normalize(vec3<f32>(-1.0, 0.0, 1.0));
-
-	    //p -= 2.0 * min(0.0, p.x * n.x + p.z * n.z) * n;
-
-
-	    p -= min(0.0, -p.x  + p.z ) * vec3<f32>( - 1.0, 0.0, 1.0);
-
-
-        //n = normalize(vec3<f32>(-1.0, 1.0, 0.0));
-	    p -= min(0.0,  ( - p.x + p.y )) * vec3<f32>( - 1.0, 1.0, 0.0);
-
-
-	    //p -= min(0.0,        - p.y + p.z) * vec3<f32>(0.0, - 1.0, 1.0);
-	    //p -= min(0.0,  p.x         - p.z) * vec3<f32>(1.0,  0.0, -1.0);
-	    //p -= min(0.0, -p.x +   p.y      ) * vec3<f32>(-1.0,  1.0, 0.0);
-
-
-        
         p = abs(p);
     }
 
