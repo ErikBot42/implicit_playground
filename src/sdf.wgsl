@@ -381,12 +381,85 @@ fn sd_cross_r(p: vec3<f32>, r: f32) -> f32 {
     return min(d.x, min(d.y, d.z)) - r;
 }
 
+//TODO exploit initial abs fold
 fn sd_menger_sponge_2(p: vec3<f32>) -> f32 {
 
     let scale = 1.3;//1.9/1.0;
+    
+    var p = p;
 
 
-    let p = scale * abs(plane_fold(p, camera.d1.xyz, 0.0));
+
+
+    //p = plane_fold(p, normalize(vec3<f32>(0.0, 1.0, -1.0)), 0.0);
+    //p = plane_fold(p, normalize(vec3<f32>(1.0, 0.0, -1.0)), 0.0);
+    //p = plane_fold(p, normalize(vec3<f32>(1.0, -1.0, 0.0)), 0.0);
+
+    //p = plane_fold(p, normalize(vec3<f32>(0.0, -1.0, -1.0)), 0.0);
+    //p = plane_fold(p, normalize(vec3<f32>(-1.0, 0.0, -1.0)), 0.0);
+    //p = plane_fold(p, normalize(vec3<f32>(-1.0, -1.0, 0.0)), 0.0);
+    {
+        p = abs(p);
+
+        var n: vec3<f32>;
+
+        //n = normalize(vec3<f32>(0.0, -1.0, 1.0));
+	    //p -= 2.0 * min(0.0,dot(p, n)) * n;
+        //n = normalize(vec3<f32>(-1.0, 0.0, 1.0));
+	    //p -= 2.0 * min(0.0,dot(p, n)) * n;
+        //n = normalize(vec3<f32>(-1.0, 1.0, 0.0));
+	    //p -= 2.0 * min(0.0,dot(p, n)) * n;
+
+	    //return p - 2.0 * min(0.0,dot(p,n)-d)*n;
+        
+        //normalize(vec3<f32>(0.0, -1.0, 1.0));
+	    p -= min(0.0, -p.y + p.z) * vec3<f32>(0.0, - 1.0, 1.0);
+
+
+        //n = normalize(vec3<f32>(-1.0, 0.0, 1.0));
+
+	    //p -= 2.0 * min(0.0, p.x * n.x + p.z * n.z) * n;
+
+
+	    p -= min(0.0, -p.x  + p.z ) * vec3<f32>( - 1.0, 0.0, 1.0);
+
+
+        //n = normalize(vec3<f32>(-1.0, 1.0, 0.0));
+	    p -= min(0.0,  ( - p.x + p.y )) * vec3<f32>( - 1.0, 1.0, 0.0);
+
+
+	    //p -= min(0.0,        - p.y + p.z) * vec3<f32>(0.0, - 1.0, 1.0);
+	    //p -= min(0.0,  p.x         - p.z) * vec3<f32>(1.0,  0.0, -1.0);
+	    //p -= min(0.0, -p.x +   p.y      ) * vec3<f32>(-1.0,  1.0, 0.0);
+
+
+        
+        p = abs(p);
+    }
+
+    //p = plane_fold(p, normalize(vec3<f32>(0.0, 1.0, 1.0)), 0.0);
+    //p = plane_fold(p, normalize(vec3<f32>(1.0, 0.0, 1.0)), 0.0);
+    //p = plane_fold(p, normalize(vec3<f32>(1.0, 1.0, 0.0)), 0.0);
+
+    //p = vec3<f32>(
+    //    p.x - 4.0 * (p.x + p.y),
+    //    p.y - 4.0 * (p.x + p.y),
+    //    p.z,
+    //);
+    
+    //p = vec3<f32>(
+    //    p.x - 4.0 * (p.x + p.z),
+    //    p.y,
+    //    p.z - 4.0 * (p.x + p.z),
+    //);
+    //p = vec3<f32>(
+    //    p.x,
+    //    p.y,
+    //    p.z - 4.0 * (p.x + p.z),
+    //);
+    
+
+    p = scale * plane_fold(p, camera.d1.xyz, 0.0);
     
     // can be any bounding sdf
     var d = sd_box(p * 2.0 + vec3<f32>(0.1, 0.2, 0.3), vec3<f32>( 1.4, 1.09, 1.9));

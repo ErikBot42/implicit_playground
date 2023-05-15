@@ -2,7 +2,8 @@
 
 
 @group(0) @binding(0) 
-var shadow_texture: texture_storage_2d<r32float, write>;
+//var shadow_texture: texture_storage_2d<r32float, write>;
+var shadow_texture: texture_storage_2d<rgba8unorm, write>;
 
 @group(0) @binding(1) 
 var<uniform> camera: CameraUniform;

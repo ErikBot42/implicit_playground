@@ -221,11 +221,11 @@ impl State {
             max_storage_buffer_binding_size: 0,
             max_vertex_buffer_array_stride: 255,
             max_compute_workgroup_storage_size: 0,
-            max_compute_invocations_per_workgroup: 1,  // 0
-            max_compute_workgroup_size_x: 1,           // 0
-            max_compute_workgroup_size_y: 1,           // 0
-            max_compute_workgroup_size_z: 1,           // 0
-            max_compute_workgroups_per_dimension: 128, // 0
+            max_compute_invocations_per_workgroup: 1, // 0
+            max_compute_workgroup_size_x: 1,          // 0
+            max_compute_workgroup_size_y: 1,          // 0
+            max_compute_workgroup_size_z: 1,          // 0
+            max_compute_workgroups_per_dimension: 128 * 2, // 0
 
             // Most of the values should be the same as the downlevel defaults
             ..wgpu::Limits::downlevel_defaults()
@@ -292,8 +292,8 @@ impl State {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let shadow_height = 100;
-        let shadow_width = 100;
+        let shadow_height = 200;
+        let shadow_width = 200;
         let shadow_texture: wgpu::Texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Shadow Texture"),
             size: wgpu::Extent3d {
@@ -304,7 +304,7 @@ impl State {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float, // Red channel only. 32 bit float per channel. Float in shader.
+            format: wgpu::TextureFormat::Rgba8Unorm, //R32Float, // Red channel only. 32 bit float per channel. Float in shader.
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
@@ -406,7 +406,7 @@ impl State {
                         wgpu::ShaderStages::COMPUTE,
                         wgpu::BindingType::StorageTexture {
                             access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: wgpu::TextureFormat::R32Float,
+                            format: wgpu::TextureFormat::Rgba8Unorm, //R32Float,
                             view_dimension: wgpu::TextureViewDimension::D2,
                         },
                         wgpu::BindingResource::TextureView(&shadow_texture_view),
@@ -947,7 +947,7 @@ impl PlayerController {
         self.time += dt;
 
         let tri = {
-            let f = 8.0;
+            let f = 1024.0;
             self.time = self.time.rem_euclid(4.0 * f);
             tri_wave(self.time / f)
         };
@@ -1078,9 +1078,10 @@ impl PlayerController {
 
         self.d1[3] = tri * 3.0 - 1.0;
 
-        self.d1[0] = (0.125 * self.time * std::f32::consts::PI).sin();
-        self.d1[1] = (0.125 * self.time * std::f32::consts::PI).cos();
-        self.d1[2] = (0.125 * self.time * std::f32::consts::PI * 0.5).sin();
+        self.d1[0] = -0.5 + 0.5 * (0.1 + 0.125 * 0.125 * self.time * std::f32::consts::PI).sin();
+        self.d1[1] = -0.5 + 0.5 * (0.2 + 0.125 * 0.125 * self.time * std::f32::consts::PI).cos();
+        self.d1[2] =
+            -0.5 + 0.5 * (0.3 + 0.125 * 0.125 * self.time * std::f32::consts::PI * 0.5).sin();
 
         let f = 1.0
             / (self.d1[0] * self.d1[0] + self.d1[1] * self.d1[1] + self.d1[2] * self.d1[2]).sqrt();

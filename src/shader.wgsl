@@ -87,6 +87,49 @@ fn vec3_to_f32_rand(co: vec3<f32>) -> f32 {
     return fract(sin(dot(co, vec3<f32>(3.12312, 12.9898, 78.233))) * 43758.5453);
 }
 
+
+/*fn ray_color_gi(ray_origin: vec3<f32>, ray_dir: vec3<f32>, ray_area: f32) -> vec4<f32> {
+
+    // TODO: deterministic multi sample
+
+    var ray_origin = ray_origin;
+    var ray_dir = ray_dir;
+
+    let t_max = 4.0;
+
+    fn light(p);
+    fn background(p);
+
+    var acc_scol = vec3<f32>(1.0);
+    var acc_light = vec3<f32>(0.0);
+
+    var acc_t = 0.0;
+
+    var i: i32 = 0;
+    loop {
+        if (i > 2) { break; }
+        let to = trace(ray_origin, ray_dir, 0.0, t_max, 100u, ray_area * 0.5);
+
+
+
+
+        if (to.t > t_max * 0.99) {
+            acc_light += background(ray_dir) * acc_scol;
+            return acc_light;
+        }
+        else {
+            acc_t += to.t;
+            ray_origin += to.t * ray_dir;
+            acc_scol *= sdf_color(ray_origin);
+            acc_light += acc_scol * light(p);
+        }
+        continuing {
+            i = i + 1;
+        }
+    }
+}*/
+
+
 fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, t_max_fog: f32, iter_pre: f32, ray_area: f32) -> vec4<f32> {
 
     //let bound_inner = bound_sphere(ray_origin, ray_dir, vec3<f32>(0.0), 1.0 * 0.1);
@@ -297,19 +340,9 @@ fn shadow(ro: vec3<f32>, rd: vec3<f32>, mint: f32, maxt: f32, tol: f32) -> f32 {
 // if component 4 = 0 => do rotation
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-
-    // ray: point, unit dir
-    // TODO: inline aspects of this expr
-    // TODO: omit norm if needed
-    // TODO: camera transform.
-    // img
-    // cam
-    
     var pre_march_sample = textureSample(pre_march_texture, pre_march_sampler, in.uv); 
     let t_min = pre_march_sample.r;
-    //let t_min = in.initial_sdf;
     let pre_march_iters = pre_march_sample.g;
-    //let pre_march_iters = 0.0;
     
     
     
@@ -326,11 +359,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let t_max_fog = t_max;
     return ray_color(ray_origin, ray_dir, t_min, t_max, t_max_fog, pre_march_iters, ray_area);
     
-
-    //let t_max = 2.0;
-    //let t_min = 0.0;//in.initial_sdf;
-    //return vec4(vec3(length(ray_area)), 1.0);
-    //return vec4<f32>(1.0/aspect_ratio, 1.0, 0.0, 1.0);
-    //return vec4<f32>(ray_dir, 1.0);
 }
+
 
