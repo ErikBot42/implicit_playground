@@ -225,7 +225,7 @@ impl State {
             max_compute_workgroup_size_x: 1,          // 0
             max_compute_workgroup_size_y: 1,          // 0
             max_compute_workgroup_size_z: 1,          // 0
-            max_compute_workgroups_per_dimension: 128 * 2, // 0
+            max_compute_workgroups_per_dimension: 128 * 2 * 2, // 0
 
             // Most of the values should be the same as the downlevel defaults
             ..wgpu::Limits::downlevel_defaults()
@@ -279,7 +279,7 @@ impl State {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::Immediate, //surface_caps.present_modes[0], // for example vsync/not vsync
+            present_mode: wgpu::PresentMode::AutoVsync,//Mailbox,//Immediate, //surface_caps.present_modes[0], // for example vsync/not vsync
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
         };
@@ -292,8 +292,8 @@ impl State {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let shadow_height = 200;
-        let shadow_width = 200;
+        let shadow_height = 512;//128; //200;
+        let shadow_width = 512;//128;
         let shadow_texture: wgpu::Texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Shadow Texture"),
             size: wgpu::Extent3d {
@@ -304,7 +304,7 @@ impl State {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm, //R32Float, // Red channel only. 32 bit float per channel. Float in shader.
+            format: wgpu::TextureFormat::Rgba16Float,//R32Float, // Red channel only. 32 bit float per channel. Float in shader.
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
@@ -314,9 +314,12 @@ impl State {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            //mag_filter: wgpu::FilterMode::Nearest,
+            //min_filter: wgpu::FilterMode::Nearest,
+            //mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
@@ -368,13 +371,15 @@ impl State {
                         wgpu::BindingType::Texture {
                             multisampled: false,
                             view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            //sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         },
                         wgpu::BindingResource::TextureView(&shadow_texture_view),
                     ),
                     (
                         wgpu::ShaderStages::FRAGMENT,
-                        wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        //wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         wgpu::BindingResource::Sampler(&shadow_sampler),
                     ),
                     (
@@ -406,7 +411,7 @@ impl State {
                         wgpu::ShaderStages::COMPUTE,
                         wgpu::BindingType::StorageTexture {
                             access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: wgpu::TextureFormat::Rgba8Unorm, //R32Float,
+                            format: wgpu::TextureFormat::Rgba16Float,//R32Float,
                             view_dimension: wgpu::TextureViewDimension::D2,
                         },
                         wgpu::BindingResource::TextureView(&shadow_texture_view),
@@ -600,7 +605,7 @@ impl State {
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[uniform]));
 
-        let print_freq: u32 = 60;
+        let print_freq: u32 = 12;
         self.frames = (self.frames + 1) % print_freq as usize;
 
         if self.frames == 0 {
@@ -1078,10 +1083,11 @@ impl PlayerController {
 
         self.d1[3] = tri * 3.0 - 1.0;
 
-        self.d1[0] = -0.5 + 0.5 * (0.1 + 0.125 * 0.125 * self.time * std::f32::consts::PI).sin();
-        self.d1[1] = -0.5 + 0.5 * (0.2 + 0.125 * 0.125 * self.time * std::f32::consts::PI).cos();
-        self.d1[2] =
-            -0.5 + 0.5 * (0.3 + 0.125 * 0.125 * self.time * std::f32::consts::PI * 0.5).sin();
+        let d1_fac = 0.125 * 0.125 * 0.125;
+
+        self.d1[0] = -0.5 + 0.5 * (0.1 + d1_fac * self.time * std::f32::consts::PI).sin();
+        self.d1[1] = -0.5 + 0.5 * (0.2 + d1_fac * self.time * std::f32::consts::PI).cos();
+        self.d1[2] = -0.5 + 0.5 * (0.3 + d1_fac * self.time * std::f32::consts::PI * 0.5).sin();
 
         let f = 1.0
             / (self.d1[0] * self.d1[0] + self.d1[1] * self.d1[1] + self.d1[2] * self.d1[2]).sqrt();
@@ -1090,7 +1096,6 @@ impl PlayerController {
         self.d1[1] *= f;
         self.d1[2] *= f;
 
-        dbg!(self.d1[0]);
         self.state = cgmath::Decomposed {
             scale: 1.0,
             rot: self.rotation,

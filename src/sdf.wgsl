@@ -63,7 +63,7 @@ fn sdf_color(p: vec3<f32>) -> vec3<f32> {
 }
 
 //fn sdf1(p: vec3<f32>) -> f32 { return sd_menger_sponge(p); }
-fn sdf2(p: vec3<f32>) -> f32 { return sd_mandelbulb(p + vec3<f32>(0.0, 0.0, 1.2)); }
+fn sdf2(p: vec3<f32>) -> f32 { return sd_mandelbulb3(p / 1.0 + vec3<f32>(0.0, 0.0, 1.0)) * 1.0;}//hyperfold(p) + vec3<f32>(0.0, 0.0, 0.9)); }
 fn sdf1(p: vec3<f32>) -> f32 { return sd_menger_sponge_2(p); }
 fn sdf0(p: vec3<f32>) -> f32 { 
 
@@ -211,11 +211,47 @@ fn pow3D_8(p: vec3<f32>, r: f32) -> vec3<f32> {
     //p.y = -16.0*y2*k3*k4*k4 + k1*k1;
     //p.z = -8.0*y*k4*(x4*x4 - 28.0*x4*x2*z2 + 70.0*x4*z4 - 28.0*x2*z2*z4 + z4*z4)*k1*k2;
 }
+
+fn sd_mandelbulb3(p: vec3<f32>) -> f32 {
+    let iterations = 3;//4;
+    let power = 8.0;
+
+    let half_power = (power - 1.0) * 0.5;
+    let bailout = 2.0;//pow(2.0, power);
+
+    var z = p;
+    var r2 = dot(z, z);
+    var dz = 1.0;
+    
+    for (var i: i32 = 0; i < iterations; i++) {
+        if (r2 > bailout) { break; }
+        
+        dz *= power * pow(r2, half_power);
+        dz += 1.0;
+        let r = length(z);
+        let theta = power * acos(z.z / r);
+        let phi = power * atan2(z.y, z.x);
+        z = p + pow(r, power) * 
+            vec3<f32>(
+                sin(theta) * cos(phi),
+                sin(theta) * sin(phi), 
+                cos(theta) 
+            );
+        
+        r2 = dot(z, z);
+    }
+
+    return 0.25 * log(r2) * sqrt(r2) / dz;
+}
+
+
 fn sd_mandelbulb(p: vec3<f32>) -> f32 {
 
-    let iterations = 4;
+    let iterations = 3;//4;
     let power = 8.0;
-    let scale = 1.0;
+    let scale = 0.9;
+
+    let p = p / scale;
 
     let half_power = (power - 1.0) * 0.5;
     let bailout = pow(2.0, power);
@@ -381,60 +417,35 @@ fn sd_cross_r(p: vec3<f32>, r: f32) -> f32 {
     return min(d.x, min(d.y, d.z)) - r;
 }
 
+fn hyperfold(p: vec3<f32>) -> vec3<f32> {
+    var p = p;
+    p = abs(p);
+
+    let max_xy = max(p.x, p.y);
+    let max_yz = max(p.y, p.z);
+    let max_zx = max(p.z, p.x);
+    let min_xy = min(p.x, p.y);
+
+    let max_xyz = max(max_xy, p.z);
+    let middle_xyz = min(min(max_xy, max_yz), max_zx);
+    let min_xyz = min(min_xy, p.z);
+
+    p.x = max_xyz;
+    p.y = middle_xyz;
+    p.z = min_xyz;
+
+    return p;
+}
+
 //TODO exploit initial abs fold
 fn sd_menger_sponge_2(p: vec3<f32>) -> f32 {
 
     let scale = 1.3;//1.9/1.0;
     
-    var p = p;
-
-
-
-
-    //p = plane_fold(p, normalize(vec3<f32>(0.0, 1.0, -1.0)), 0.0);
-    //p = plane_fold(p, normalize(vec3<f32>(1.0, 0.0, -1.0)), 0.0);
-    //p = plane_fold(p, normalize(vec3<f32>(1.0, -1.0, 0.0)), 0.0);
-
-    //p = plane_fold(p, normalize(vec3<f32>(0.0, -1.0, -1.0)), 0.0);
-    //p = plane_fold(p, normalize(vec3<f32>(-1.0, 0.0, -1.0)), 0.0);
-    //p = plane_fold(p, normalize(vec3<f32>(-1.0, -1.0, 0.0)), 0.0);
-    {
-        p = abs(p);
-
-        var n: vec3<f32>;
-
-        let q = p;
-
-	    p -= min(0.0, - p.y + p.z ) * vec3<f32>(0.0, - 1.0, 1.0);
-	    p -= min(0.0, - p.x + p.z ) * vec3<f32>( - 1.0, 0.0, 1.0);
-	    p -= min(0.0, - p.x + p.y ) * vec3<f32>( - 1.0, 1.0, 0.0);
-
-        p = abs(p);
-    }
-
-    //p = plane_fold(p, normalize(vec3<f32>(0.0, 1.0, 1.0)), 0.0);
-    //p = plane_fold(p, normalize(vec3<f32>(1.0, 0.0, 1.0)), 0.0);
-    //p = plane_fold(p, normalize(vec3<f32>(1.0, 1.0, 0.0)), 0.0);
-
-    //p = vec3<f32>(
-    //    p.x - 4.0 * (p.x + p.y),
-    //    p.y - 4.0 * (p.x + p.y),
-    //    p.z,
-    //);
-    
-    //p = vec3<f32>(
-    //    p.x - 4.0 * (p.x + p.z),
-    //    p.y,
-    //    p.z - 4.0 * (p.x + p.z),
-    //);
-    //p = vec3<f32>(
-    //    p.x,
-    //    p.y,
-    //    p.z - 4.0 * (p.x + p.z),
-    //);
-    
+    var p = hyperfold(p);
 
     p = scale * plane_fold(p, camera.d1.xyz, 0.0);
+    //p = scale * plane_fold(p, normalize(vec3<f32>(-0.1, -0.2, -0.3)), 0.0);
     
     // can be any bounding sdf
     var d = sd_box(p * 2.0 + vec3<f32>(0.1, 0.2, 0.3), vec3<f32>( 1.4, 1.09, 1.9));
