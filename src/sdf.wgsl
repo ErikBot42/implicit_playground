@@ -63,7 +63,7 @@ fn sdf_color(p: vec3<f32>) -> vec3<f32> {
 }
 
 //fn sdf1(p: vec3<f32>) -> f32 { return sd_menger_sponge(p); }
-fn sdf2(p: vec3<f32>) -> f32 { return sd_mandelbulb3(p / 1.0 + vec3<f32>(0.0, 0.0, 1.0)) * 1.0;}//hyperfold(p) + vec3<f32>(0.0, 0.0, 0.9)); }
+fn sdf2(p: vec3<f32>) -> f32 { return sd_mandelbulb3(hyperfold(p) / 0.2 + vec3<f32>(-2.0, -0.8, -0.8)) * 0.2; }
 fn sdf1(p: vec3<f32>) -> f32 { return sd_menger_sponge_2(p); }
 fn sdf0(p: vec3<f32>) -> f32 { 
 
@@ -217,7 +217,7 @@ fn sd_mandelbulb3(p: vec3<f32>) -> f32 {
     let power = 8.0;
 
     let half_power = (power - 1.0) * 0.5;
-    let bailout = 2.0;//pow(2.0, power);
+    let bailout = pow(2.0, power);
 
     var z = p;
     var r2 = dot(z, z);

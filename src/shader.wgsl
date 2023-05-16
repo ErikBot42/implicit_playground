@@ -206,7 +206,7 @@ fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, 
 
     let sample = sample_shadow_texture(p);
 
-    var sun_fac = 1.0; 
+    var sun_fac = 0.3 / pow(length(p) / length(ray_origin), 2.0); 
     if (sample < length(p) * 0.99) { 
         sun_fac = 0.0;
     }
@@ -288,7 +288,8 @@ fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, 
         let final_light = mix(light, fog_res_color, fog);
 
         let result_light = final_light * sdf_color(p);
-        return vec4<f32>(result_light.xy, bound_inner.y, 1.0);
+        //return vec4<f32>(result_light.xy, bound_inner.y, 1.0);
+        return vec4<f32>(result_light.xyz, 1.0);
     }
 
 }

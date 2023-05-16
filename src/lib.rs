@@ -481,10 +481,19 @@ impl State {
             Vec<_>,
             Vec<_>,
         ) = {
-            let sdf_lib_source = read_to_string("src/sdf.wgsl").unwrap();
-            let fragment_vertex_source = read_to_string("src/shader.wgsl").unwrap();
-            let compute_source = read_to_string("src/compute.wgsl").unwrap();
-            let pre_march_source = read_to_string("src/pre_march.wgsl").unwrap();
+
+            macro_rules! load_file {
+                ($a:tt) => {
+                    //include_str!($a).to_string()
+                    read_to_string(concat!("src/", $a)).unwrap()
+                }
+            }
+
+
+            let sdf_lib_source = load_file!("sdf.wgsl");
+            let fragment_vertex_source = load_file!("shader.wgsl");
+            let compute_source = load_file!("compute.wgsl");
+            let pre_march_source = load_file!("pre_march.wgsl");
 
             itertools::multiunzip(sdf_wgsl_gen(NUM_SDF).iter().map(|sdf_prefix| {
                 let fragment_vertex_source: String =
@@ -972,7 +981,7 @@ impl PlayerController {
         let range = |a, b| (a as i32 - b as i32) as f32;
         let mut rotation_input = cgmath::Vector3::new(
             range(self.key_turn_right, self.key_turn_left),
-            range(self.key_turn_up, self.key_turn_down) + self.state.z.y * 0.3,
+            range(self.key_turn_up, self.key_turn_down),// + self.state.z.y * 0.3,
             -self.state.x.y * 1.0,
         );
 
@@ -1197,7 +1206,16 @@ fn sdf_wgsl_gen(max: usize) -> Vec<String> {
             let sdf0 = i;
             let sdf1 = (i + 1) % max;
             format!(
-                "
+//                "
+//fn sdf(p: vec3<f32>) -> f32 {{ 
+//    return sdf_outer(p);
+//}}
+//
+//fn sdf_outer(p: vec3<f32>) -> f32 {{
+//    return sdf{sdf0}(p);
+//}}
+//"
+"
 fn sdf(p: vec3<f32>) -> f32 {{ 
     return min(sdf{sdf0}(p), sdf{sdf1}(p / 0.1) * 0.1); 
 }}
@@ -1205,7 +1223,6 @@ fn sdf(p: vec3<f32>) -> f32 {{
 fn sdf_outer(p: vec3<f32>) -> f32 {{
     return sdf{sdf0}(p);
 }}
-
 "
             )
             //format!("fn sdf(p: vec3<f32>) -> f32 {{ return sdf{sdf0}(p); }}\n")
