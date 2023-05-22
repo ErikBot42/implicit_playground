@@ -129,7 +129,6 @@ fn vec3_to_f32_rand(co: vec3<f32>) -> f32 {
     }
 }*/
 
-
 fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, t_max_fog: f32, iter_pre: f32, ray_area: f32) -> vec4<f32> {
 
     //let bound_inner = bound_sphere(ray_origin, ray_dir, vec3<f32>(0.0), 1.0 * 0.1);
@@ -137,10 +136,12 @@ fn ray_color(ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_min: f32, t_max: f32, 
     
     var to: TraceOutput;
 
+    let max_iterations = 100u;
+
     if (bound_inner.y < 0.0) {
-        to = trace_outer(ray_origin, ray_dir, t_min, t_max, 100u, ray_area * 0.5);//0.001);
+        to = trace_outer(ray_origin, ray_dir, t_min, t_max, max_iterations, ray_area * 0.5);//0.001);
     } else {
-        to = trace(ray_origin, ray_dir, t_min, t_max, 100u, ray_area * 0.5);//0.001);
+        to = trace(ray_origin, ray_dir, t_min, t_max, max_iterations, ray_area * 0.5);//0.001);
     }
 
     let i = f32(to.i) + iter_pre;

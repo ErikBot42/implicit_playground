@@ -57,7 +57,13 @@ pub async fn run() {
     }
 
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().build(&event_loop).unwrap();
+    let window = WindowBuilder::new()
+        .with_inner_size(winit::dpi::LogicalSize {
+            width: 960,
+            height: 540,
+        })
+        .build(&event_loop)
+        .unwrap();
 
     #[cfg(target_arch = "wasm32")]
     {
@@ -145,7 +151,9 @@ struct State {
     bind_group: wgpu::BindGroup,
     compute_bind_group: wgpu::BindGroup,
 
+    start_time: Instant,
     last_frame_print: Instant,
+    frames_since_start: usize,
     frames: usize,
 
     player: PlayerController,
@@ -169,120 +177,24 @@ struct State {
 impl State {
     // Creating some of the wgpu types requires async code
     async fn new(window: Window) -> Self {
-        print_universal("HELLO WORLD");
+        // ****************************************************************
+        // Init surface/device
+        // ****************************************************************
+        print_universal("This should print to both wasm and stdout");
 
-        let gpu_get_device_timer_start = Instant::now();
+        let (size, surface, device, queue, gpu_get_device_timer_elapsed, config) =
+            prepare_surface(&window).await;
 
-        let size: winit::dpi::PhysicalSize<u32> = window.inner_size();
+        // ****************************************************************
+        // Init other
+        // ****************************************************************
 
-        let enabled_backends = wgpu::Backends::all(); // & (!wgpu::Backends::GL);
-
-        // The instance is a handle to our GPU
-        // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
-        let instance: wgpu::Instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: enabled_backends,
-            dx12_shader_compiler: Default::default(),
-        });
-
-        // # Safety
-        //
-        // The surface needs to live as long as the window that created it.
-        // State owns the window so this should be safe.
-        let surface: wgpu::Surface = unsafe { instance.create_surface(&window) }.unwrap();
-
-        //instance.enumerate_adapters(wgpu::Backends::all());
-        //
-        instance
-            .enumerate_adapters(wgpu::Backends::all())
-            .for_each(|adapter| {
-                dbgu!(adapter);
-                dbgu!(adapter.get_info());
-            });
-
-        dbgu!("selecting adapter...");
-        let adapter: wgpu::Adapter = instance
-            .enumerate_adapters(enabled_backends)
-            .find(|adapter| {
-                dbgu!(adapter);
-                // Check if this adapter supports our surface
-                adapter.is_surface_supported(&surface)
-            })
-            .unwrap();
-        dbgu!("selected adapter");
-
-        dbgu!(adapter.features());
-        dbgu!(wgpu::Limits::downlevel_webgl2_defaults());
-
-        let min_limit_needed = wgpu::Limits {
-            max_uniform_buffers_per_shader_stage: 11,
-            max_storage_buffers_per_shader_stage: 0,
-            max_storage_textures_per_shader_stage: 1, // 0
-            max_dynamic_storage_buffers_per_pipeline_layout: 0,
-            max_storage_buffer_binding_size: 0,
-            max_vertex_buffer_array_stride: 255,
-            max_compute_workgroup_storage_size: 0,
-            max_compute_invocations_per_workgroup: 1, // 0
-            max_compute_workgroup_size_x: 1,          // 0
-            max_compute_workgroup_size_y: 1,          // 0
-            max_compute_workgroup_size_z: 1,          // 0
-            max_compute_workgroups_per_dimension: 128 * 2 * 2, // 0
-
-            // Most of the values should be the same as the downlevel defaults
-            ..wgpu::Limits::downlevel_defaults()
-        };
-
-        dbgu!("requesting device...");
-        let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    features: wgpu::Features::empty(),
-                    // WebGL doesn't support all of wgpu's features, so if
-                    // we're building for the web we'll have to disable some.
-                    limits: if cfg!(target_arch = "wasm32") {
-                        //wgpu::Limits::downlevel_webgl2_defaults()
-                        //wgpu::Limits::downlevel_defaults()
-                        // attempt to use more resonable defaults
-                        //wgpu::Limits::default()
-                        min_limit_needed
-                    } else {
-                        // use strict web limits
-                        //wgpu::Limits::downlevel_webgl2_defaults()
-                        //wgpu::Limits::downlevel_defaults() // <- ok
-                        //wgpu::Limits::default()
-                        min_limit_needed
-                    },
-                    label: None,
-                },
-                None, // Trace path
-            )
-            .await
-            .unwrap();
-
-        dbgu!(device.features());
-
-        let gpu_get_device_timer_elapsed = gpu_get_device_timer_start.elapsed();
+        let shadow_height = 128;
+        let shadow_width = 128;
+        let pre_march_height = 9 * 8; //72; //  9 * 8
+        let pre_march_width = 16 * 8; //128; // 16 * 8
 
         let gpu_pipeline_setup_timer_start = Instant::now();
-
-        let surface_caps = surface.get_capabilities(&adapter);
-
-        // shader assumes srgb
-        let surface_format: wgpu::TextureFormat = surface_caps
-            .formats
-            .iter()
-            .copied()
-            .filter(|f| f.is_srgb())
-            .next()
-            .unwrap_or(surface_caps.formats[0]);
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.width,
-            height: size.height,
-            present_mode: wgpu::PresentMode::AutoVsync,//Mailbox,//Immediate, //surface_caps.present_modes[0], // for example vsync/not vsync
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-        };
 
         let player = PlayerController::new();
         let camera_uniform = player.get_uniform();
@@ -292,8 +204,6 @@ impl State {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let shadow_height = 512;//128; //200;
-        let shadow_width = 512;//128;
         let shadow_texture: wgpu::Texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Shadow Texture"),
             size: wgpu::Extent3d {
@@ -304,7 +214,7 @@ impl State {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,//R32Float, // Red channel only. 32 bit float per channel. Float in shader.
+            format: wgpu::TextureFormat::R32Float, // Red channel only. 32 bit float per channel. Float in shader.
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
@@ -322,9 +232,6 @@ impl State {
             //mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
-
-        let pre_march_height = 72; //  9 * 8
-        let pre_march_width = 128; // 16 * 8
 
         let pre_march_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("pre march texture"),
@@ -371,14 +278,12 @@ impl State {
                         wgpu::BindingType::Texture {
                             multisampled: false,
                             view_dimension: wgpu::TextureViewDimension::D2,
-                            //sample_type: wgpu::TextureSampleType::Float { filterable: false },
                             sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         },
                         wgpu::BindingResource::TextureView(&shadow_texture_view),
                     ),
                     (
                         wgpu::ShaderStages::FRAGMENT,
-                        //wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                         wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         wgpu::BindingResource::Sampler(&shadow_sampler),
                     ),
@@ -411,7 +316,7 @@ impl State {
                         wgpu::ShaderStages::COMPUTE,
                         wgpu::BindingType::StorageTexture {
                             access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: wgpu::TextureFormat::Rgba16Float,//R32Float,
+                            format: wgpu::TextureFormat::R32Float,
                             view_dimension: wgpu::TextureViewDimension::D2,
                         },
                         wgpu::BindingResource::TextureView(&shadow_texture_view),
@@ -476,19 +381,13 @@ impl State {
                 push_constant_ranges: &[],
             });
 
-        let (render_pipelines, shadow_compute_pipelines, pre_march_pipelines): (
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-        ) = {
-
+        let (render_pipelines, shadow_compute_pipelines, pre_march_pipelines) = {
             macro_rules! load_file {
                 ($a:tt) => {
                     //include_str!($a).to_string()
                     read_to_string(concat!("src/", $a)).unwrap()
-                }
+                };
             }
-
 
             let sdf_lib_source = load_file!("sdf.wgsl");
             let fragment_vertex_source = load_file!("shader.wgsl");
@@ -501,28 +400,16 @@ impl State {
                 let compute_source: String = sdf_prefix.clone() + &sdf_lib_source + &compute_source;
                 let pre_march_source: String =
                     sdf_prefix.clone() + &sdf_lib_source + &pre_march_source;
-
                 let render_pipeline = make_render_pipeline(
                     &device,
                     fragment_vertex_source,
                     &render_pipeline_layout,
                     &config,
                 );
-                //println!("{compute_source}");
                 let shadow_compute_pipeline =
                     make_compute_pipeline(&device, compute_source, &shadow_compute_pipeline_layout);
-
                 let pre_march_pipeline =
                     make_compute_pipeline(&device, pre_march_source, &pre_march_pipeline_layout);
-
-                /*let pre_march_pipeline: wgpu::ComputePipeline =
-                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("Pre march pipeline"),
-                    layout: Some(&pre_march_pipeline_layout),
-                    module: &pre_march_shader,
-                    entry_point: "compute_main",
-                });*/
-
                 (render_pipeline, shadow_compute_pipeline, pre_march_pipeline)
             }))
             //.unzip()
@@ -534,10 +421,6 @@ impl State {
         });
         let num_vertices = VERTICES.len() as u32;
 
-        let last_frame = Instant::now();
-
-        let last_update = Instant::now();
-
         let active_gamepad = None;
         let gilrs_context = gilrs::Gilrs::new().unwrap();
 
@@ -546,6 +429,7 @@ impl State {
             gpu_get_device_timer_elapsed,
             gpu_pipeline_setup_timer_start.elapsed()
         );
+        let now = Instant::now();
         Self {
             window,
             surface,
@@ -558,10 +442,10 @@ impl State {
             num_vertices,
             camera_buffer,
             bind_group,
-            last_frame_print: last_frame,
+            last_frame_print: now,
             frames: 0,
             player,
-            last_update,
+            last_update: now,
             active_gamepad,
             gilrs_context,
             shadow_compute_pipelines,
@@ -573,6 +457,8 @@ impl State {
             pre_march_bind_group,
             pre_march_width,
             pre_march_height,
+            start_time: now,
+            frames_since_start: 0,
         }
     }
 
@@ -616,12 +502,19 @@ impl State {
 
         let print_freq: u32 = 12;
         self.frames = (self.frames + 1) % print_freq as usize;
+        self.frames_since_start += 1;
 
         if self.frames == 0 {
             let frame_period =
                 replace(&mut self.last_frame_print, Instant::now()).elapsed() / print_freq;
             let fps = 1.0 / frame_period.as_secs_f32();
-            println!("fps: {fps:.1}, ({frame_period:?})",);
+
+            let total_frame_period = self.start_time.elapsed() / self.frames_since_start as _;
+            let total_fps = 1.0 / total_frame_period.as_secs_f32();
+
+            println!(
+                "fps: {fps:.1}, ({frame_period:?}), fps: {total_fps:.1}, ({total_frame_period:?})",
+            );
         }
 
         let output: wgpu::SurfaceTexture = self.surface.get_current_texture()?;
@@ -649,6 +542,7 @@ impl State {
             });
             cpass.set_bind_group(0, &self.pre_march_bind_group, &[]);
             cpass.set_pipeline(&self.pre_march_pipelines[self.pipeline_index]);
+            //cpass.dispatch_workgroups(self.pre_march_width, self.pre_march_height, 1);
             cpass.dispatch_workgroups(self.pre_march_width, self.pre_march_height, 1);
         }
 
@@ -686,6 +580,135 @@ impl State {
 
         Ok(())
     }
+}
+
+async fn prepare_surface(
+    window: &Window,
+) -> (
+    winit::dpi::PhysicalSize<u32>,
+    wgpu::Surface,
+    wgpu::Device,
+    wgpu::Queue,
+    std::time::Duration,
+    wgpu::SurfaceConfiguration,
+) {
+    let gpu_get_device_timer_start = Instant::now();
+
+    let size: winit::dpi::PhysicalSize<u32> = window.inner_size();
+
+    let enabled_backends = wgpu::Backends::all();
+    // & (!wgpu::Backends::GL);
+
+    // The instance is a handle to our GPU
+    // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
+    let instance: wgpu::Instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: enabled_backends,
+        dx12_shader_compiler: Default::default(),
+    });
+
+    // # Safety
+    //
+    // The surface needs to live as long as the window that created it.
+    // State owns the window so this should be safe.
+    let surface: wgpu::Surface = unsafe { instance.create_surface(window) }.unwrap();
+
+    //instance.enumerate_adapters(wgpu::Backends::all());
+    //
+    instance
+        .enumerate_adapters(wgpu::Backends::all())
+        .for_each(|adapter| {
+            dbgu!(adapter);
+            dbgu!(adapter.get_info());
+        });
+
+    dbgu!("selecting adapter...");
+    let adapter: wgpu::Adapter = instance
+        .enumerate_adapters(enabled_backends)
+        .find(|adapter| {
+            dbgu!(adapter);
+            // Check if this adapter supports our surface
+            adapter.is_surface_supported(&surface)
+        })
+        .unwrap();
+    dbgu!("selected adapter");
+
+    dbgu!(adapter.features());
+    dbgu!(wgpu::Limits::downlevel_webgl2_defaults());
+
+    let min_limit_needed = wgpu::Limits {
+        max_uniform_buffers_per_shader_stage: 11,
+        max_storage_buffers_per_shader_stage: 0,
+        max_storage_textures_per_shader_stage: 1, // 0
+        max_dynamic_storage_buffers_per_pipeline_layout: 0,
+        max_storage_buffer_binding_size: 0,
+        max_vertex_buffer_array_stride: 255,
+        max_compute_workgroup_storage_size: 0,
+        max_compute_invocations_per_workgroup: 1, // 0
+        max_compute_workgroup_size_x: 1,           //1          // 0
+        max_compute_workgroup_size_y: 1,           //1          // 0
+        max_compute_workgroup_size_z: 1,           //1          // 0
+        max_compute_workgroups_per_dimension: 1024, // 0
+        ..wgpu::Limits::downlevel_defaults()
+    };
+
+    dbgu!("requesting device...");
+    let (device, queue) = adapter
+        .request_device(
+            &wgpu::DeviceDescriptor {
+                features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+                //wgpu::Features::empty(),
+                // WebGL doesn't support all of wgpu's features, so if
+                // we're building for the web we'll have to disable some.
+                limits: if cfg!(target_arch = "wasm32") {
+                    //wgpu::Limits::downlevel_webgl2_defaults()
+                    //wgpu::Limits::downlevel_defaults()
+                    // attempt to use more resonable defaults
+                    //wgpu::Limits::default()
+                    min_limit_needed
+                } else {
+                    // use strict web limits
+                    //wgpu::Limits::downlevel_webgl2_defaults()
+                    //wgpu::Limits::downlevel_defaults() // <- ok
+                    //wgpu::Limits::default()
+                    min_limit_needed
+                },
+                label: None,
+            },
+            None, // Trace path
+        )
+        .await
+        .unwrap();
+
+    dbgu!(device.features());
+
+    let gpu_get_device_timer_elapsed = gpu_get_device_timer_start.elapsed();
+
+    let surface_caps = surface.get_capabilities(&adapter);
+    // shader assumes srgb
+    let surface_format: wgpu::TextureFormat = surface_caps
+        .formats
+        .iter()
+        .copied()
+        .filter(|f| f.is_srgb())
+        .next()
+        .unwrap_or(surface_caps.formats[0]);
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: surface_format,
+        width: size.width,
+        height: size.height,
+        present_mode: wgpu::PresentMode::AutoVsync, //AutoVsync, //Mailbox,//, //surface_caps.present_modes[0], // for example vsync/not vsync
+        alpha_mode: surface_caps.alpha_modes[0],
+        view_formats: vec![],
+    };
+    (
+        size,
+        surface,
+        device,
+        queue,
+        gpu_get_device_timer_elapsed,
+        config,
+    )
 }
 
 fn make_compute_pipeline<'a>(
@@ -981,7 +1004,7 @@ impl PlayerController {
         let range = |a, b| (a as i32 - b as i32) as f32;
         let mut rotation_input = cgmath::Vector3::new(
             range(self.key_turn_right, self.key_turn_left),
-            range(self.key_turn_up, self.key_turn_down),// + self.state.z.y * 0.3,
+            range(self.key_turn_up, self.key_turn_down), // + self.state.z.y * 0.3,
             -self.state.x.y * 1.0,
         );
 
@@ -1206,16 +1229,16 @@ fn sdf_wgsl_gen(max: usize) -> Vec<String> {
             let sdf0 = i;
             let sdf1 = (i + 1) % max;
             format!(
-//                "
-//fn sdf(p: vec3<f32>) -> f32 {{ 
-//    return sdf_outer(p);
-//}}
-//
-//fn sdf_outer(p: vec3<f32>) -> f32 {{
-//    return sdf{sdf0}(p);
-//}}
-//"
-"
+                //                "
+                //fn sdf(p: vec3<f32>) -> f32 {{
+                //    return sdf_outer(p);
+                //}}
+                //
+                //fn sdf_outer(p: vec3<f32>) -> f32 {{
+                //    return sdf{sdf0}(p);
+                //}}
+                //"
+                "
 fn sdf(p: vec3<f32>) -> f32 {{ 
     return min(sdf{sdf0}(p), sdf{sdf1}(p / 0.1) * 0.1); 
 }}

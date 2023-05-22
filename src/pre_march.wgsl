@@ -6,6 +6,7 @@ var pre_march_texture: texture_storage_2d<rg32float, write>;
 var<uniform> camera: CameraUniform;
 
 @compute
+//@workgroup_size(8,8,1)
 @workgroup_size(1) // does not need to execute in group
 fn compute_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     //let uv = vec2<f32>(global_id.xy)/vec2<f32>(textureDimensions(shadow_texture).xy);
@@ -49,8 +50,14 @@ fn compute_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         200u, 
         ray_area
     );
-    let t = max(to.t - abs(to.last_tol) * 1.0, 0.0);
+    let t = max(to.t - (to.last_tol * 2.0 - to.last_s) * 1.0, 0.0);
     let i = f32(to.i) + to.last_s/to.last_tol;
+
+    //let dtx = dpdx(t);
+    //let dty = dpdy(t);
+
+    //let dix = dpdx(i);
+    //let diy = dpdy(i);
 
     textureStore(pre_march_texture, global_id.xy, vec4<f32>(t, i, 1.0, 1.0));
 }

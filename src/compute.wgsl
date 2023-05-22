@@ -2,8 +2,8 @@
 
 
 @group(0) @binding(0) 
-var shadow_texture: texture_storage_2d<rgba16float, write>;
-//var shadow_texture: texture_storage_2d<r32float, write>;
+//var shadow_texture: texture_storage_2d<rgba16float, write>;
+var shadow_texture: texture_storage_2d<r32float, write>;
 //var shadow_texture: texture_storage_2d<rgba8unorm, write>;
 
 @group(0) @binding(1) 
@@ -31,7 +31,7 @@ fn compute_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         //0.001
         max(ndim.x, ndim.y) * 2.0
     );
-    let t: f32 = to.t + to.last_tol * 2.0;
+    let t: f32 = to.t + (to.last_tol * 2.0 + to.last_s);
     // - 2.0 * to.last_tol / dot(sdf_normal_e(ray_origin + ray_dir * to.t, to.last_tol), ray_dir);
     textureStore(shadow_texture, global_id.xy, vec4<f32>(t));
 }
